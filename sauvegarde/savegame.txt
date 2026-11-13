@@ -1,0 +1,23 @@
+CHRONIQUES_SAVE_V3
+3
+"Jhon" "Pile Face" 10 3 3 35 235 136 136 20 7 37
+"Lame de Ombre" "Une arme accordée à l’élément du héros." 2 0 0 0 1 3
+"Manteau de Ombre" "Une armure accordée à l’élément du héros." 0 2 0 0 1 3
+3
+"Potion solaire" "+45 PV" 0 0 45 25 0 0
+"Potion solaire" "+45 PV" 0 0 45 25 0 0
+"Potion solaire" "+45 PV" 0 0 45 25 0 0
+"Maladie" "Vampire" 7 3 3 35 260 146 146 20 8 12
+"Lame de Ombre" "Une arme accordée à l’élément du héros." 2 0 0 0 1 3
+"Manteau de Ombre" "Une armure accordée à l’élément du héros." 0 2 0 0 1 3
+1
+"Potion solaire" "+45 PV" 0 0 45 25 0 0
+"Rachid" "Guerrier" 1 1 3 35 260 161 161 20 11 12
+"Lame de Feu" "Une arme accordée à l’élément du héros." 2 0 0 0 1 1
+"Manteau de Feu" "Une armure accordée à l’élément du héros." 0 2 0 0 1 1
+2
+"Potion solaire" "+45 PV" 0 0 45 25 0 0
+"Potion solaire" "+45 PV" 0 0 45 25 0 0
+1
+"Premier éclat" "vaincre" "Vaincre votre premier adversaire" 1 1 60 30 1 0
+1 0 0 0 0

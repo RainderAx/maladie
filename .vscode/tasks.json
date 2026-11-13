@@ -1,0 +1,38 @@
+{
+	"tasks": [
+		{
+			"type": "cppbuild",
+			"label": "C/C++: g++ générer le fichier actif",
+			"command": "/usr/bin/g++",
+			"args": [
+				"-fdiagnostics-color=always",
+				"-g",
+				"${file}",
+				"-o",
+				"${fileDirname}/${fileBasenameNoExtension}"
+			],
+			"options": {
+				"cwd": "${fileDirname}"
+			},
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"detail": "Tâche générée par le débogueur."
+		},
+		{
+			"label": "Build and run C++ project",
+			"type": "shell",
+			"command": "make && ./chroniques_de_la_faille",
+			"isBackground": false,
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": "build"
+		}
+	],
+	"version": "2.0.0"
+}
