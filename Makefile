@@ -1,17 +1,25 @@
-CXX := g++
-CXXFLAGS := -std=c++17 -Wall -Wextra -pedantic -O2 -Iinclude -Iinclude/characters -Iinclude/core -Iinclude/entities -Iinclude/systems
-TARGET := chroniques_de_la_faille
-SOURCES := main.cpp $(wildcard src/characters/*.cpp) $(wildcard src/entities/*.cpp) $(wildcard src/systems/*.cpp)
+BUILD_DIR := build
 
-all: $(TARGET)
+all:
+	cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Release -DBUILD_GRAPHICAL_GAME=ON
+	cmake --build $(BUILD_DIR) --target chroniques_de_la_faille
 
-$(TARGET): $(SOURCES)
-	$(CXX) $(CXXFLAGS) $(SOURCES) -o $(TARGET)
+run: all
+	./$(BUILD_DIR)/chroniques_de_la_faille
 
-run: $(TARGET)
-	./$(TARGET)
+terminal:
+	cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Release -DBUILD_GRAPHICAL_GAME=OFF
+	cmake --build $(BUILD_DIR) --target chroniques_de_la_faille_terminal
+
+run-terminal: terminal
+	./$(BUILD_DIR)/chroniques_de_la_faille_terminal
+
+test:
+	cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Release -DBUILD_GRAPHICAL_GAME=OFF
+	cmake --build $(BUILD_DIR) --target roguelite_tests
+	ctest --test-dir $(BUILD_DIR) --output-on-failure
 
 clean:
-	rm -f $(TARGET)
+	rm -rf $(BUILD_DIR) chroniques_de_la_faille chroniques_de_la_faille_terminal
 
-.PHONY: all run clean
+.PHONY: all run terminal run-terminal test clean

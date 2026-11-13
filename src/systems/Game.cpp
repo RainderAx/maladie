@@ -1,5 +1,6 @@
 #include "../../include/systems/Game.hpp"
 #include "../../include/core/Terminal.hpp"
+#include "../../include/core/HeroFactory.hpp"
 #include "../../include/systems/DungeonSystem.hpp"
 #include "../../include/systems/ArenaSystem.hpp"
 #include <filesystem>
@@ -11,24 +12,16 @@ void Game::autoSave() const { SaveSystem::save(team, progress); }
 
 void Game::configureHero(Player& hero, int index){
     std::cout << "\nNom du héros " << index << " : ";
-    std::getline(std::cin, hero.name);
-    if(hero.name.empty()) hero.name="Héros "+std::to_string(index);
+    std::string heroName;
+    std::getline(std::cin, heroName);
+    if(heroName.empty()) heroName="Héros "+std::to_string(index);
     title("CLASSE DU HÉROS " + std::to_string(index));
     std::cout << "1 Guerrier\n2 Berserker\n3 Paladin\n4 Prêtre\n5 Oracle\n6 Templier\n7 Vampire\n8 Sanguinaire\n9 Seigneur Nocturne\n10 Pile Face\n> ";
     int classId=ask(1,10);
-    hero.characterClass=makeCharacterClass(classId);
-    hero.className=hero.characterClass->name();
-    title("ÉLÉMENT DE " + hero.name);
+    title("ÉLÉMENT DE " + heroName);
     std::cout << "1 Eau\n2 Feu\n3 Plante\n4 Ombre\n> ";
-    hero.element=elementFromId(ask(1,4)-1);
-    if(classId==1){hero.maxHp=125;hero.hp=125;hero.baseDefense=7;}
-    else if(classId<=3){hero.maxHp=115;hero.hp=115;hero.baseDefense=6;}
-    else if(classId<=6){hero.maxHp=105;hero.hp=105;hero.baseDefense=5;}
-    else if(classId<=9){hero.maxHp=110;hero.hp=110;hero.baseDefense=4;}
-    else {hero.maxHp=100;hero.hp=100;hero.baseDefense=3;hero.chance=35;}
-    hero.weapon={"Lame de "+elementName(hero.element),"Une arme accordée à l’élément du héros.",2,0,0,0,true,hero.element};
-    hero.armor={"Manteau de "+elementName(hero.element),"Une armure accordée à l’élément du héros.",0,2,0,0,true,hero.element};
-    hero.inventory={{"Potion solaire","+45 PV",0,0,45,25,false,Element::Eau},{"Potion solaire","+45 PV",0,0,45,25,false,Element::Eau}};
+    const Element element=elementFromId(ask(1,4)-1);
+    hero=createHero(heroName,classId,element);
     std::cout << hero.name << " rejoint l’équipe avec l’élément " << elementName(hero.element) << ".\n";
 }
 

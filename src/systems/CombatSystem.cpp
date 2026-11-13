@@ -1,4 +1,5 @@
 #include "../../include/systems/CombatSystem.hpp"
+#include "../../include/systems/CombatRules.hpp"
 #include "../../include/core/Terminal.hpp"
 #include <algorithm>
 #include <random>
@@ -68,10 +69,9 @@ bool combat(std::vector<Player>& team, Enemy enemy){
             std::cout << hero.name << " récupère " << potion->heal << " PV.\n";
             hero.inventory.erase(potion);
         } else {
-            int rawDamage = choice == 2
-                ? hero.attack() + hero.characterClass->skillDamage(hero.level) + roll(0,4)
-                : hero.attack() + roll(-3,6);
-            int damage = std::max(1, static_cast<int>(rawDamage * elementMultiplier(hero.element, enemy.element)) - enemy.defense);
+            const int variation = choice == 2 ? roll(0,4) : roll(-3,6);
+            const bool critical = roll(1,100) <= hero.criticalChance();
+            int damage = CombatRules::playerDamage(hero, enemy, choice == 2, variation, critical);
             if(choice == 2){
                 std::cout << Terminal::cyan << hero.name << " utilise " << hero.characterClass->skill() << " !" << Terminal::reset << "\n";
                 std::cout << "Méthode C++ appelée : " << hero.characterClass->skillMethodName() << "()\n";
@@ -81,7 +81,7 @@ bool combat(std::vector<Player>& team, Enemy enemy){
             double multiplier = elementMultiplier(hero.element, enemy.element);
             if(multiplier > 1.0) std::cout << Terminal::green << "Avantage élémentaire !" << Terminal::reset << "\n";
             if(multiplier < 1.0) std::cout << Terminal::yellow << "Résistance élémentaire ennemie." << Terminal::reset << "\n";
-            if(roll(1,100) <= hero.criticalChance()){ damage *= 2; std::cout << Terminal::yellow << "Coup critique !" << Terminal::reset << "\n"; }
+            if(critical) std::cout << Terminal::yellow << "Coup critique !" << Terminal::reset << "\n";
             enemy.hp -= damage;
             std::cout << hero.name << " inflige " << damage << " dégâts.\n";
             updateQuestProgress(team, "vaincre");
@@ -91,8 +91,10 @@ bool combat(std::vector<Player>& team, Enemy enemy){
         for(size_t i=0;i<team.size();++i) if(team[i].alive()) living.push_back(static_cast<int>(i));
         int targetIndex = living[roll(0, static_cast<int>(living.size())-1)];
         Player& target = team[targetIndex];
-        int taken = std::max(1, static_cast<int>(enemy.attack * elementMultiplier(enemy.element, target.element)) - target.defense() + roll(-3,5));
-        if(roll(1,100) <= enemy.chance){ taken *= 2; std::cout << Terminal::red << "Coup critique ennemi !" << Terminal::reset << "\n"; }
+        const int variation = roll(-3,5);
+        const bool critical = roll(1,100) <= enemy.chance;
+        int taken = CombatRules::enemyDamage(enemy, target, variation, critical);
+        if(critical) std::cout << Terminal::red << "Coup critique ennemi !" << Terminal::reset << "\n";
         target.hp -= taken;
         std::cout << enemy.name << " attaque " << target.name << " et inflige " << taken << " dégâts.\n";
     }
