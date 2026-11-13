@@ -20,6 +20,14 @@ struct RogueliteProfile {
     std::vector<Player> roster;
     std::vector<UpgradeRanks> upgradeRanks;
     int fragments = 0;
+    std::vector<Item> armory;
+};
+
+enum class EquipmentSlot { Weapon, Armor };
+
+struct EquipmentOffer {
+    Item item;
+    int fragmentCost = 0;
 };
 
 struct Nemesis {
@@ -33,6 +41,8 @@ struct RogueliteRun {
     std::vector<Nemesis> nemeses;
     std::uint32_t seed = 0;
     int completedRooms = 0;
+    int roomDeaths = 0;
+    bool roomLootExtracted = false;
     bool active = false;
     bool won = false;
     bool pendingReward = false;
@@ -61,6 +71,12 @@ struct CombatTurnResult {
 };
 
 void initializeRogueliteProfile(RogueliteProfile& profile, std::vector<Player> roster);
+const std::vector<EquipmentOffer>& rogueliteEquipmentOffers();
+bool buyRogueliteEquipment(RogueliteProfile& profile, std::size_t offerIndex);
+bool equipFromArmory(RogueliteProfile& profile, std::size_t heroIndex, std::size_t itemIndex, EquipmentSlot slot);
+bool equipRunItem(RogueliteRun& run, std::size_t heroIndex, std::size_t inventoryIndex);
+bool upgradeRunEquipment(RogueliteRun& run, std::size_t heroIndex, EquipmentSlot slot);
+bool extractRunLoot(RogueliteProfile& profile, RogueliteRun& run, std::size_t heroIndex, std::size_t inventoryIndex);
 bool buyPermanentUpgrade(RogueliteProfile& profile, std::size_t heroIndex, PermanentStat stat);
 void awardRoomFragments(RogueliteProfile& profile, bool bossRoom);
 bool startRogueliteRun(const RogueliteProfile& profile, RogueliteRun& run, std::uint32_t seed);

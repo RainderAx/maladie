@@ -28,7 +28,6 @@ Player createHero(const std::string& name, int classId, Element element) {
         hero.maxHp = 100;
         hero.hp = 100;
         hero.baseDefense = 3;
-        hero.chance = 35;
     }
 
     hero.weapon = {"Lame de " + elementName(element), "Une arme accordée à l’élément du héros.",

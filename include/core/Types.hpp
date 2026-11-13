@@ -14,6 +14,7 @@ struct Item {
     int attack=0, defense=0, heal=0, value=0;
     bool equipment=false;
     Element element=Element::Ombre;
+    int upgradeLevel=0;
 };
 
 struct Quest {

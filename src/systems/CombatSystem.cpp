@@ -53,9 +53,11 @@ bool combat(std::vector<Player>& team, Enemy enemy){
         }
         int active = chooseHero(team);
         Player& hero = team[active];
-        std::cout << "1. Frappe  2. Technique  3. Potion  4. Fuir\n> ";
-        int choice = Terminal::ask(1,4);
-        if(choice == 4 && !enemy.boss){
+        std::cout << "1. Frappe  2. Technique  3. Potion";
+        if (!enemy.boss) std::cout << "  4. Fuir";
+        std::cout << "\n> ";
+        int choice = Terminal::ask(1, enemy.boss ? 3 : 4);
+        if(choice == 4){
             std::cout << "L’équipe quitte la zone de combat.\n";
             return false;
         }
@@ -84,7 +86,6 @@ bool combat(std::vector<Player>& team, Enemy enemy){
             if(critical) std::cout << Terminal::yellow << "Coup critique !" << Terminal::reset << "\n";
             enemy.hp -= damage;
             std::cout << hero.name << " inflige " << damage << " dégâts.\n";
-            updateQuestProgress(team, "vaincre");
         }
         if(enemy.hp <= 0) break;
         std::vector<int> living;

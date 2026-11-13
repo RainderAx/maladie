@@ -1,0 +1,19 @@
+CHRONIQUES_SAVE_V3
+3
+"Ada" "Guerrier" 1 1 1 0 80 125 125 8 7 10
+"Lame de Feu" "Arme accordée" 2 0 0 0 1 1
+"Manteau de Feu" "Armure accordée" 0 2 0 0 1 1
+2
+"Potion solaire" "+45 PV" 0 0 45 25 0 0
+"Potion solaire" "+45 PV" 0 0 45 25 0 0
+"Brume" "Berserker" 2 0 1 0 80 115 115 12 6 10
+"Lame de Eau" "Arme accordée" 2 0 0 0 1 0
+"Manteau de Eau" "Armure accordée" 0 2 0 0 1 0
+0
+"Cendre" "Oracle" 5 2 1 0 80 105 105 12 5 10
+"Lame de Plante" "Arme accordée" 2 0 0 0 1 2
+"Manteau de Plante" "Armure accordée" 0 2 0 0 1 2
+0
+1
+"Premier éclat" "vaincre" "Vaincre le premier adversaire" 1 0 60 30 0 0
+0 0 0 0 0

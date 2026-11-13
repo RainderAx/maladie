@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <iostream>
 #include <random>
 #include <string>
 #include <vector>
@@ -108,6 +109,10 @@ private:
     bool confirmNewRun_ = false;
     int selectedHero_ = 0;
     int editingName_ = -1;
+    std::size_t selectedArmoryIndex_ = 0;
+    std::size_t selectedLootIndex_ = 0;
+    int selectedLootHero_ = 0;
+    bool showEquipmentTab_ = false;
     std::array<std::string, 3> draftNames_{{"Aube", "Brume", "Cendre"}};
     std::array<int, 3> draftClass_{{1, 4, 7}};
     std::array<int, 3> draftElement_{{0, 1, 3}};
@@ -125,13 +130,25 @@ private:
         else selectedHero_ = firstLivingHero();
     }
 
+    bool persistProfile() {
+        if (RogueliteSaveSystem::saveProfile(profile_)) return true;
+        statusMessage_ = "Impossible d’enregistrer le profil roguelite.";
+        std::cerr << statusMessage_ << '\n';
+        lastCombatMessage_ = statusMessage_;
+        return false;
+    }
+
+    bool persistRun() {
+        if (RogueliteSaveSystem::saveRun(run_)) return true;
+        statusMessage_ = "Impossible d’enregistrer la run roguelite.";
+        std::cerr << statusMessage_ << '\n';
+        lastCombatMessage_ = statusMessage_;
+        return false;
+    }
+
     void persistCheckpoint() {
-        if (!profile_.roster.empty()) {
-            if (!RogueliteSaveSystem::saveProfile(profile_)) statusMessage_ = "Impossible d’enregistrer le profil.";
-        }
-        if (run_.active && scene_ != Scene::Combat) {
-            if (!RogueliteSaveSystem::saveRun(run_)) statusMessage_ = "Impossible d’enregistrer la run.";
-        }
+        if (!profile_.roster.empty()) persistProfile();
+        if (run_.active && scene_ != Scene::Combat) persistRun();
     }
 
     void drawBackdrop() const {
@@ -261,7 +278,7 @@ private:
                 roster.push_back(createHero(draftNames_[i], draftClass_[i], static_cast<Element>(draftElement_[i])));
             }
             initializeRogueliteProfile(profile_, std::move(roster));
-            hasProfile_ = RogueliteSaveSystem::saveProfile(profile_);
+            hasProfile_ = persistProfile();
             selectedHero_ = 0;
             scene_ = Scene::Workshop;
         }
@@ -288,10 +305,20 @@ private:
 
     void drawWorkshop() {
         drawHeader("Atelier de la Faille", "Dépensez les fragments gagnés ; ces bonus suivent vos héros dans les runs suivantes.");
+        if (gameButton(75, 111, 180, 34, "AMÉLIORATIONS", true, !showEquipmentTab_)) showEquipmentTab_ = false;
+        if (gameButton(265, 111, 180, 34, "ARMURERIE", true, showEquipmentTab_)) showEquipmentTab_ = true;
+        if (showEquipmentTab_) drawEquipmentWorkshop();
+        else drawPermanentUpgrades();
+        if (gameButton(75, screenH() - 73, 180, 46, "MENU")) scene_ = Scene::Menu;
+        if (gameButton(screenW() - 315, screenH() - 73, 240, 46, "LANCER LA RUN", true, true)) beginRun();
+        if (!statusMessage_.empty()) centeredText(statusMessage_, 0, screenH() - 38, screenW(), 15, danger);
+    }
+
+    void drawPermanentUpgrades() {
         DrawText(TextFormat("FRAGMENTS DISPONIBLES : %d", profile_.fragments), screenW() - 360, 48, 17, gold);
         const float left = 70.0f;
         for (std::size_t i = 0; i < profile_.roster.size(); ++i) {
-            const float y = 128.0f + static_cast<float>(i) * 155.0f;
+            const float y = 151.0f + static_cast<float>(i) * 148.0f;
             const Player& hero = profile_.roster[i];
             panelBox({left, y, static_cast<float>(screenW() - 140), 136}, static_cast<int>(i) == selectedHero_ ? gold : Color{55, 69, 89, 255});
             drawHeroPortrait(left + 18, y + 27, hero, static_cast<int>(i) == selectedHero_);
@@ -314,7 +341,7 @@ private:
                                enabled, j == 0)) {
                     if (buyPermanentUpgrade(profile_, i, stat)) {
                         statusMessage_ = hero.name + " progresse durablement.";
-                        RogueliteSaveSystem::saveProfile(profile_);
+                        persistProfile();
                     }
                 }
                 if (rank > 0) DrawText(TextFormat("Rang %d", rank), static_cast<int>(bx + 4), static_cast<int>(y + 100), 13, muted);
@@ -322,8 +349,81 @@ private:
             const Rectangle card{left, y, static_cast<float>(screenW() - 140), 136};
             if (CheckCollisionPointRec(GetMousePosition(), card) && IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) selectedHero_ = static_cast<int>(i);
         }
-        if (gameButton(75, screenH() - 73, 180, 46, "MENU")) scene_ = Scene::Menu;
-        if (gameButton(screenW() - 315, screenH() - 73, 240, 46, "LANCER LA RUN", true, true)) beginRun();
+    }
+
+    void drawEquipmentWorkshop() {
+        const float left = 70.0f;
+        const float rosterWidth = 350.0f;
+        DrawText("CHOISIR UN HÉROS", static_cast<int>(left), 151, 15, gold);
+        for (std::size_t index = 0; index < profile_.roster.size(); ++index) {
+            const float y = 176.0f + static_cast<float>(index) * 84.0f;
+            const Player& hero = profile_.roster[index];
+            panelBox({left, y, rosterWidth, 78}, static_cast<int>(index) == selectedHero_ ? gold : Color{55, 69, 89, 255});
+            drawHeroPortrait(left + 12, y + 10, hero, static_cast<int>(index) == selectedHero_);
+            DrawText(hero.name.c_str(), static_cast<int>(left + 78), static_cast<int>(y + 8), 18, pale);
+            DrawText(("Arme : " + hero.weapon.name).c_str(), static_cast<int>(left + 78), static_cast<int>(y + 35), 12, muted);
+            DrawText(("Armure : " + hero.armor.name).c_str(), static_cast<int>(left + 78), static_cast<int>(y + 54), 12, muted);
+            const Rectangle card{left, y, rosterWidth, 78};
+            if (CheckCollisionPointRec(GetMousePosition(), card) && IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
+                selectedHero_ = static_cast<int>(index);
+            }
+        }
+
+        const auto& offers = rogueliteEquipmentOffers();
+        const float offersX = left + rosterWidth + 25.0f;
+        const float offersWidth = static_cast<float>(screenW()) - offersX - 70.0f;
+        DrawText("ÉQUIPEMENT À ACHETER — FRAGMENTS", static_cast<int>(offersX), 151, 15, gold);
+        for (std::size_t index = 0; index < offers.size(); ++index) {
+            const float y = 175.0f + static_cast<float>(index) * 82.0f;
+            const EquipmentOffer& offer = offers[index];
+            panelBox({offersX, y, offersWidth, 72});
+            DrawText(offer.item.name.c_str(), static_cast<int>(offersX + 15), static_cast<int>(y + 8), 16, pale);
+            DrawText(offer.item.description.c_str(), static_cast<int>(offersX + 15), static_cast<int>(y + 38), 13, muted);
+            const std::string purchase = "ACHETER " + std::to_string(offer.fragmentCost);
+            if (gameButton(offersX + offersWidth - 152, y + 16, 137, 40, purchase,
+                           profile_.fragments >= offer.fragmentCost, true)) {
+                if (buyRogueliteEquipment(profile_, index)) {
+                    statusMessage_ = offer.item.name + " ajouté à l’armurerie.";
+                    persistProfile();
+                }
+            }
+        }
+
+        const float storageY = 430.0f;
+        panelBox({left, storageY, static_cast<float>(screenW()) - 140.0f, 226});
+        DrawText(TextFormat("ARMURERIE — %zu PIÈCE(S) • FRAGMENTS : %d", profile_.armory.size(), profile_.fragments),
+                 static_cast<int>(left + 20), static_cast<int>(storageY + 17), 15, gold);
+        if (profile_.armory.empty()) {
+            centeredText("Achetez une arme ou une armure ci-dessus, ou extrayez du butin pendant une run.",
+                         static_cast<int>(left + 20), static_cast<int>(storageY + 66), screenW() - 180, 16, muted);
+        } else {
+            selectedArmoryIndex_ %= profile_.armory.size();
+            const Item& item = profile_.armory[selectedArmoryIndex_];
+            if (gameButton(left + 24, storageY + 66, 54, 42, "<"))
+                selectedArmoryIndex_ = (selectedArmoryIndex_ + profile_.armory.size() - 1) % profile_.armory.size();
+            centeredText(item.name + " — " + item.description + " • " + elementName(item.element),
+                         static_cast<int>(left + 88), static_cast<int>(storageY + 77), screenW() - 316, 16, pale);
+            if (gameButton(screenW() - 132, storageY + 66, 54, 42, ">"))
+                selectedArmoryIndex_ = (selectedArmoryIndex_ + 1) % profile_.armory.size();
+            const float buttonY = storageY + 139;
+            const Item selectedItem = profile_.armory[selectedArmoryIndex_];
+            const bool canEquipWeapon = selectedItem.equipment && selectedItem.attack > 0;
+            const bool canEquipArmor = selectedItem.equipment && selectedItem.defense > 0;
+            if (gameButton(left + 100, buttonY, 270, 45, "ÉQUIPER COMME ARME", canEquipWeapon, true)) {
+                if (equipFromArmory(profile_, static_cast<std::size_t>(selectedHero_), selectedArmoryIndex_, EquipmentSlot::Weapon)) {
+                    selectedArmoryIndex_ = 0;
+                    statusMessage_ = "Arme équipée; la précédente est retournée à l’armurerie.";
+                    persistProfile();
+                }
+            }
+            if (gameButton(left + 410, buttonY, 270, 45, "ÉQUIPER COMME ARMURE", canEquipArmor, true)) {
+                if (equipFromArmory(profile_, static_cast<std::size_t>(selectedHero_), selectedArmoryIndex_, EquipmentSlot::Armor)) {
+                    selectedArmoryIndex_ = 0;
+                    statusMessage_ = "Armure équipée; la précédente est retournée à l’armurerie.";
+                    persistProfile();
+                }
+            }
+        }
     }
 
     void beginRun() {
@@ -336,8 +436,8 @@ private:
         hasRun_ = true;
         selectedHero_ = 0;
         lastCombatMessage_.clear();
-        RogueliteSaveSystem::saveProfile(profile_);
-        RogueliteSaveSystem::saveRun(run_);
+        persistProfile();
+        persistRun();
         roomCheckpoint_ = run_;
         scene_ = Scene::Map;
     }
@@ -426,8 +526,8 @@ private:
             (static_cast<std::uint32_t>(run_.completedRooms + 1) * 2654435761U);
         rng_.seed(roomSeed);
         roomCheckpoint_ = run_;
-        RogueliteSaveSystem::saveProfile(profile_);
-        RogueliteSaveSystem::saveRun(run_);
+        persistProfile();
+        persistRun();
         selectedHero_ = firstLivingHero();
         lastCombatMessage_.clear();
         scene_ = Scene::Combat;
@@ -473,8 +573,8 @@ private:
                 } else {
                     lastCombatMessage_ = "Salle purifiée. Choisissez votre récompense.";
                     scene_ = Scene::Reward;
-                    RogueliteSaveSystem::saveProfile(profile_);
-                    RogueliteSaveSystem::saveRun(run_);
+                    persistProfile();
+                    persistRun();
                     roomCheckpoint_ = run_;
                 }
             }
@@ -482,8 +582,8 @@ private:
     }
 
     void saveAfterCombatEnd() {
-        RogueliteSaveSystem::saveProfile(profile_);
-        RogueliteSaveSystem::saveRun(run_);
+        persistProfile();
+        persistRun();
         hasRun_ = false;
     }
 
@@ -541,25 +641,108 @@ private:
         DrawText("ÉCHAP : quitter le combat et reprendre au début de la salle", 75, screenH() - 104, 13, muted);
     }
 
+    std::vector<std::size_t> equipmentInventoryIndices(std::size_t heroIndex) const {
+        std::vector<std::size_t> indices;
+        if (heroIndex >= run_.team.size()) return indices;
+        const auto& inventory = run_.team[heroIndex].inventory;
+        for (std::size_t index = 0; index < inventory.size(); ++index) {
+            const Item& item = inventory[index];
+            if (item.equipment && (item.attack > 0 || item.defense > 0)) indices.push_back(index);
+        }
+        return indices;
+    }
+
     void drawReward() {
-        drawHeader("Récompense de salle", "Choisissez un seul avantage avant de poursuivre. Les héros tombés ne peuvent pas être réanimés.");
+        drawHeader("Récompense de salle", "Choisissez un seul avantage; gérez l’équipement séparément. Les héros tombés ne peuvent pas être réanimés.");
         panelBox({80, 135, static_cast<float>(screenW() - 160), 306}, gold);
         DrawText("LES SURVIVANTS", 108, 158, 16, gold);
         drawPartyPanel(100, 188, static_cast<float>(screenW() - 200), true, true);
+
         const float cardY = 455.0f;
-        const float cardWidth = static_cast<float>((screenW() - 190) / 2);
+        const float cardWidth = static_cast<float>((screenW() - 200) / 3);
         panelBox({80, cardY, cardWidth, 190}, teal);
-        centeredText("POTION SOLAIRE", 100, static_cast<int>(cardY + 27), static_cast<int>(cardWidth - 40), 22, pale);
-        centeredText("Ajoute une potion +45 PV à " + (run_.team.empty() ? std::string("un héros") : run_.team[static_cast<std::size_t>(selectedHero_)].name),
-                     100, static_cast<int>(cardY + 68), static_cast<int>(cardWidth - 40), 15, muted);
-        if (gameButton(120, cardY + 125, cardWidth - 80, 43, "CHOISIR LA POTION", true, true)) {
-            claimReward(RoomReward::Potion);
+        centeredText("POTION SOLAIRE", 90, static_cast<int>(cardY + 21), static_cast<int>(cardWidth - 20), 18, pale);
+        centeredText("+45 PV dans le sac de " + (run_.team.empty() ? std::string("un héros") : run_.team[static_cast<std::size_t>(selectedHero_)].name),
+                     90, static_cast<int>(cardY + 51), static_cast<int>(cardWidth - 20), 13, muted);
+        if (gameButton(95, cardY + 130, cardWidth - 30, 38, "CHOISIR POTION", true, true)) claimReward(RoomReward::Potion);
+
+        const float restX = 90.0f + cardWidth;
+        panelBox({restX, cardY, cardWidth, 190}, gold);
+        centeredText("REPOS DU CAMP", static_cast<int>(restX + 10), static_cast<int>(cardY + 21), static_cast<int>(cardWidth - 20), 18, pale);
+        centeredText("Rend 20 % des PV max à tous les survivants.", static_cast<int>(restX + 10), static_cast<int>(cardY + 51), static_cast<int>(cardWidth - 20), 13, muted);
+        if (gameButton(restX + 15, cardY + 130, cardWidth - 30, 38, "CHOISIR REPOS")) claimReward(RoomReward::Rest);
+
+        const float gearX = 100.0f + 2.0f * cardWidth;
+        panelBox({gearX, cardY, cardWidth, 190}, violet);
+        centeredText("FORGE & BUTIN", static_cast<int>(gearX + 8), static_cast<int>(cardY + 14), static_cast<int>(cardWidth - 16), 17, pale);
+        if (!run_.team.empty()) {
+            const std::size_t forgeHero = static_cast<std::size_t>(std::clamp(selectedHero_, 0, static_cast<int>(run_.team.size()) - 1));
+            const Player& hero = run_.team[forgeHero];
+            const int weaponCost = 45 + 30 * hero.weapon.upgradeLevel;
+            const int armorCost = 45 + 30 * hero.armor.upgradeLevel;
+            DrawText(TextFormat("Forge : %s • Or %d", hero.name.c_str(), hero.gold), static_cast<int>(gearX + 13), static_cast<int>(cardY + 38), 12, muted);
+            const float upgradeWidth = (cardWidth - 36) / 2;
+            const bool weaponReady = hero.alive() && hero.weapon.equipment && hero.weapon.attack > 0 &&
+                hero.weapon.upgradeLevel < 3 && hero.gold >= weaponCost;
+            const bool armorReady = hero.alive() && hero.armor.equipment && hero.armor.defense > 0 &&
+                hero.armor.upgradeLevel < 3 && hero.gold >= armorCost;
+            if (gameButton(gearX + 12, cardY + 54, upgradeWidth, 29,
+                           "ARME +2 / " + std::to_string(weaponCost), weaponReady)) {
+                if (upgradeRunEquipment(run_, forgeHero, EquipmentSlot::Weapon)) {
+                    statusMessage_ = "Arme améliorée pendant la run.";
+                    persistRun();
+                }
+            }
+            if (gameButton(gearX + 24 + upgradeWidth, cardY + 54, upgradeWidth, 29,
+                           "ARMURE +2 / " + std::to_string(armorCost), armorReady)) {
+                if (upgradeRunEquipment(run_, forgeHero, EquipmentSlot::Armor)) {
+                    statusMessage_ = "Armure améliorée pendant la run.";
+                    persistRun();
+                }
+            }
         }
-        const float rightX = 110.0f + cardWidth;
-        panelBox({rightX, cardY, cardWidth, 190}, gold);
-        centeredText("REPOS DU CAMP", static_cast<int>(rightX + 20), static_cast<int>(cardY + 27), static_cast<int>(cardWidth - 40), 22, pale);
-        centeredText("Rend 20 % des PV max à tous les survivants.", static_cast<int>(rightX + 20), static_cast<int>(cardY + 68), static_cast<int>(cardWidth - 40), 15, muted);
-        if (gameButton(rightX + 40, cardY + 125, cardWidth - 80, 43, "CHOISIR LE REPOS")) claimReward(RoomReward::Rest);
+
+        if (!run_.team.empty()) {
+            selectedLootHero_ = std::clamp(selectedLootHero_, 0, static_cast<int>(run_.team.size()) - 1);
+            if (gameButton(gearX + 12, cardY + 88, 38, 26, "<")) {
+                selectedLootHero_ = (selectedLootHero_ + static_cast<int>(run_.team.size()) - 1) % static_cast<int>(run_.team.size());
+                selectedLootIndex_ = 0;
+            }
+            const Player& lootHero = run_.team[static_cast<std::size_t>(selectedLootHero_)];
+            centeredText("Sac : " + lootHero.name, static_cast<int>(gearX + 52), static_cast<int>(cardY + 93), static_cast<int>(cardWidth - 104), 13, pale);
+            if (gameButton(gearX + cardWidth - 50, cardY + 88, 38, 26, ">")) {
+                selectedLootHero_ = (selectedLootHero_ + 1) % static_cast<int>(run_.team.size());
+                selectedLootIndex_ = 0;
+            }
+            const auto indices = equipmentInventoryIndices(static_cast<std::size_t>(selectedLootHero_));
+            if (indices.empty()) {
+                centeredText("Aucun équipement dans ce sac.", static_cast<int>(gearX + 12), static_cast<int>(cardY + 119), static_cast<int>(cardWidth - 24), 12, muted);
+            } else {
+                selectedLootIndex_ %= indices.size();
+                if (gameButton(gearX + 12, cardY + 115, 34, 26, "<")) selectedLootIndex_ = (selectedLootIndex_ + indices.size() - 1) % indices.size();
+                const Item& item = run_.team[static_cast<std::size_t>(selectedLootHero_)].inventory[indices[selectedLootIndex_]];
+                centeredText(item.name, static_cast<int>(gearX + 48), static_cast<int>(cardY + 120), static_cast<int>(cardWidth - 96), 12, pale);
+                if (gameButton(gearX + cardWidth - 38, cardY + 115, 26, 26, ">")) selectedLootIndex_ = (selectedLootIndex_ + 1) % indices.size();
+                const float actionWidth = (cardWidth - 36) / 2;
+                const bool canEquip = lootHero.alive();
+                if (gameButton(gearX + 12, cardY + 151, actionWidth, 30, "ÉQUIPER", canEquip)) {
+                    if (equipRunItem(run_, static_cast<std::size_t>(selectedLootHero_), indices[selectedLootIndex_])) {
+                        selectedLootIndex_ = 0;
+                        statusMessage_ = "La pièce remplacée reste dans le sac.";
+                        persistRun();
+                    }
+                }
+                if (gameButton(gearX + 24 + actionWidth, cardY + 151, actionWidth, 30,
+                               "EXTRAIRE", !run_.roomLootExtracted, true)) {
+                    if (extractRunLoot(profile_, run_, static_cast<std::size_t>(selectedLootHero_), indices[selectedLootIndex_])) {
+                        selectedLootIndex_ = 0;
+                        statusMessage_ = "Butin extrait et sécurisé à la base.";
+                        persistProfile();
+                        persistRun();
+                    }
+                }
+            }
+        }
         if (!statusMessage_.empty()) centeredText(statusMessage_, 0, screenH() - 38, screenW(), 15, danger);
     }
 
@@ -567,8 +750,8 @@ private:
         const std::size_t hero = static_cast<std::size_t>(std::clamp(selectedHero_, 0, static_cast<int>(run_.team.size()) - 1));
         if (!claimRoomReward(run_, hero, reward)) return;
         statusMessage_ = reward == RoomReward::Rest ? "Les survivants reprennent leur souffle." : "Potion ajoutée au sac.";
-        RogueliteSaveSystem::saveProfile(profile_);
-        if (RogueliteSaveSystem::saveRun(run_)) roomCheckpoint_ = run_;
+        persistProfile();
+        if (persistRun()) roomCheckpoint_ = run_;
         scene_ = Scene::Map;
     }
 
@@ -584,6 +767,8 @@ private:
         if (!run_.nemeses.empty()) centeredText(TextFormat("Rivaux encore en liberté : %zu", run_.nemeses.size()), 0, 385, screenW(), 16, violet);
         centeredText(victory ? "Vos héros conserveront leurs améliorations pour la prochaine expédition." :
                      "Les fragments et entraînements permanents restent acquis.", 0, 422, screenW(), 16, muted);
+        if (statusMessage_.rfind("Impossible d’enregistrer", 0) == 0)
+            centeredText(statusMessage_, 0, 462, screenW(), 15, danger);
         const float x = static_cast<float>(screenW() / 2 - 240);
         if (gameButton(x, 500, 220, 54, "PRÉPARER UNE NOUVELLE RUN", true, true)) {
             hasRun_ = false;

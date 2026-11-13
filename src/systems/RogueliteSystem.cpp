@@ -11,6 +11,7 @@ constexpr int maxHpRanks = 5;
 constexpr int maxAttackRanks = 8;
 constexpr int maxDefenseRanks = 8;
 constexpr int normalRoomCount = 4;
+constexpr std::size_t maxArmoryCount = 1000;
 
 int rankFor(const UpgradeRanks& ranks, PermanentStat stat) {
     switch (stat) {
@@ -89,6 +90,7 @@ Nemesis* findNemesis(RogueliteRun& run, const std::string& id) {
 }
 
 void promoteKiller(RogueliteRun& run, Encounter& encounter, Player& victim) {
+    const int currentHp = encounter.enemy.hp;
     if (encounter.nemesisId.empty()) {
         encounter.nemesisId = "rival-" + std::to_string(run.seed) + "-" +
             std::to_string(run.completedRooms + 1) + "-" + std::to_string(run.nemeses.size() + 1);
@@ -98,7 +100,10 @@ void promoteKiller(RogueliteRun& run, Encounter& encounter, Player& victim) {
     } else {
         run.nemeses.push_back(createNemesisFromKill(encounter.enemy, victim, encounter.nemesisId));
     }
-    if (Nemesis* nemesis = findNemesis(run, encounter.nemesisId)) encounter.enemy = nemesis->enemy;
+    if (Nemesis* nemesis = findNemesis(run, encounter.nemesisId)) {
+        nemesis->enemy.hp = std::clamp(currentHp, 0, nemesis->enemy.maxHp);
+        encounter.enemy = nemesis->enemy;
+    }
 }
 }
 
@@ -106,6 +111,82 @@ void initializeRogueliteProfile(RogueliteProfile& profile, std::vector<Player> r
     profile.roster = std::move(roster);
     profile.upgradeRanks.assign(profile.roster.size(), UpgradeRanks{});
     profile.fragments = std::max(0, profile.fragments);
+}
+
+const std::vector<EquipmentOffer>& rogueliteEquipmentOffers() {
+    static const std::vector<EquipmentOffer> offers{
+        {{"Épée turquoise", "ATK +9 — Eau", 9, 0, 0, 120, true, Element::Eau}, 6},
+        {{"Plastron forestier", "DEF +8 — Plante", 0, 8, 0, 120, true, Element::Plante}, 6},
+        {{"Lame des braises", "ATK +12 — Feu", 12, 0, 0, 180, true, Element::Feu}, 9}
+    };
+    return offers;
+}
+
+bool buyRogueliteEquipment(RogueliteProfile& profile, std::size_t offerIndex) {
+    const auto& offers = rogueliteEquipmentOffers();
+    if (offerIndex >= offers.size() || profile.fragments < offers[offerIndex].fragmentCost ||
+        profile.armory.size() >= maxArmoryCount) return false;
+    profile.armory.push_back(offers[offerIndex].item);
+    profile.fragments -= offers[offerIndex].fragmentCost;
+    return true;
+}
+
+bool equipFromArmory(RogueliteProfile& profile, std::size_t heroIndex, std::size_t itemIndex, EquipmentSlot slot) {
+    if (heroIndex >= profile.roster.size() || itemIndex >= profile.armory.size()) return false;
+    const Item item = profile.armory[itemIndex];
+    if (!item.equipment ||
+        (slot == EquipmentSlot::Weapon && item.attack <= 0) ||
+        (slot == EquipmentSlot::Armor && item.defense <= 0)) return false;
+
+    Player& hero = profile.roster[heroIndex];
+    Item& equipped = slot == EquipmentSlot::Weapon ? hero.weapon : hero.armor;
+    const Item replaced = equipped;
+    equipped = item;
+    profile.armory.erase(profile.armory.begin() + static_cast<std::ptrdiff_t>(itemIndex));
+    if (replaced.equipment && !replaced.name.empty()) profile.armory.push_back(replaced);
+    return true;
+}
+
+bool equipRunItem(RogueliteRun& run, std::size_t heroIndex, std::size_t inventoryIndex) {
+    if (!run.active || !run.pendingReward || heroIndex >= run.team.size() || !run.team[heroIndex].alive()) return false;
+    Player& hero = run.team[heroIndex];
+    if (inventoryIndex >= hero.inventory.size()) return false;
+    const Item item = hero.inventory[inventoryIndex];
+    if (!item.equipment || (item.attack <= 0 && item.defense <= 0)) return false;
+    Item& equipped = item.attack > 0 ? hero.weapon : hero.armor;
+    const Item replaced = equipped;
+    equipped = item;
+    hero.inventory.erase(hero.inventory.begin() + static_cast<std::ptrdiff_t>(inventoryIndex));
+    if (replaced.equipment && !replaced.name.empty()) hero.inventory.push_back(replaced);
+    return true;
+}
+
+bool upgradeRunEquipment(RogueliteRun& run, std::size_t heroIndex, EquipmentSlot slot) {
+    if (!run.active || !run.pendingReward || heroIndex >= run.team.size() || !run.team[heroIndex].alive()) return false;
+    Player& hero = run.team[heroIndex];
+    Item& item = slot == EquipmentSlot::Weapon ? hero.weapon : hero.armor;
+    if (!item.equipment || item.upgradeLevel < 0 || item.upgradeLevel >= 3 ||
+        (slot == EquipmentSlot::Weapon && item.attack <= 0) ||
+        (slot == EquipmentSlot::Armor && item.defense <= 0)) return false;
+    const int cost = 45 + 30 * item.upgradeLevel;
+    if (hero.gold < cost) return false;
+    hero.gold -= cost;
+    if (slot == EquipmentSlot::Weapon) item.attack += 2;
+    else item.defense += 2;
+    ++item.upgradeLevel;
+    return true;
+}
+
+bool extractRunLoot(RogueliteProfile& profile, RogueliteRun& run, std::size_t heroIndex, std::size_t inventoryIndex) {
+    if (!run.active || !run.pendingReward || run.roomLootExtracted || heroIndex >= run.team.size() ||
+        inventoryIndex >= run.team[heroIndex].inventory.size() || profile.armory.size() >= maxArmoryCount) return false;
+    Player& hero = run.team[heroIndex];
+    const Item item = hero.inventory[inventoryIndex];
+    if (!item.equipment || (item.attack <= 0 && item.defense <= 0)) return false;
+    profile.armory.push_back(item);
+    hero.inventory.erase(hero.inventory.begin() + static_cast<std::ptrdiff_t>(inventoryIndex));
+    run.roomLootExtracted = true;
+    return true;
 }
 
 bool buyPermanentUpgrade(RogueliteProfile& profile, std::size_t heroIndex, PermanentStat stat) {
@@ -247,9 +328,10 @@ CombatTurnResult resolveCombatAction(RogueliteRun& run, Encounter& encounter, st
     result.targetIndex = static_cast<int>(targetIndex);
     result.enemyCritical = roll(rng, 1, 100) <= encounter.enemy.chance;
     result.enemyDamage = CombatRules::enemyDamage(encounter.enemy, target, roll(rng, -3, 5), result.enemyCritical);
-    target.hp -= result.enemyDamage;
+    target.hp = std::max(0, target.hp - result.enemyDamage);
     if (!target.alive()) {
         result.heroDied = true;
+        ++run.roomDeaths;
         promoteKiller(run, encounter, target);
         if (!teamAlive(run.team)) {
             run.active = false;
@@ -281,11 +363,22 @@ bool resolveEncounterVictory(RogueliteProfile& profile, RogueliteRun& run, Encou
     }
 
     awardRoomFragments(profile, encounter.boss);
+    const int xpStep = encounter.boss ? 250 : 100;
+    profile.fragments += std::min(2, encounter.enemy.xp / xpStep);
+    if (!encounter.nemesisId.empty()) ++profile.fragments;
+    if (run.roomDeaths == 0) ++profile.fragments;
+    run.roomDeaths = 0;
     if (encounter.boss) {
+        const std::size_t heroCount = std::min(profile.roster.size(), run.team.size());
+        for (std::size_t index = 0; index < heroCount; ++index) {
+            profile.roster[index].weapon = run.team[index].weapon;
+            profile.roster[index].armor = run.team[index].armor;
+        }
         run.won = true;
         run.active = false;
     } else {
         ++run.completedRooms;
+        run.roomLootExtracted = false;
         run.pendingReward = true;
     }
     return true;

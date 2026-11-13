@@ -3,6 +3,7 @@
 #include "../../include/core/HeroFactory.hpp"
 #include "../../include/systems/DungeonSystem.hpp"
 #include "../../include/systems/ArenaSystem.hpp"
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -56,7 +57,11 @@ void Game::inventory(){
         for(size_t index=0;index<hero.inventory.size();++index){const auto& item=hero.inventory[index];std::cout<<index+1<<". "<<item.name<<" — "<<item.description<<" — Élément : "<<elementName(item.element)<<"\n";}
         std::cout<<"0 Retour\n> ";int choice=ask(0,static_cast<int>(hero.inventory.size()));if(choice==0)return;
         Item item=hero.inventory[choice-1];
-        if(item.equipment){if(item.attack>0)hero.weapon=item;else hero.armor=item;hero.inventory.erase(hero.inventory.begin()+choice-1);std::cout<<"Équipement changé. Bonus élémentaire actuel : +"<<hero.matchingEquipmentBonus()<<".\n";}
+        if(item.equipment){
+            if(hero.equipItemFromInventory(static_cast<std::size_t>(choice-1)))
+                std::cout<<"Équipement changé. L’ancienne pièce reste dans le sac. Bonus élémentaire actuel : +"<<hero.matchingEquipmentBonus()<<".\n";
+            else std::cout<<"Cet équipement ne peut pas être équipé.\n";
+        }
         else if(item.heal){hero.hp=std::min(hero.maxHp,hero.hp+item.heal);hero.inventory.erase(hero.inventory.begin()+choice-1);std::cout<<"Potion utilisée.\n";}
         autoSave();
     }
@@ -100,6 +105,11 @@ void Game::run(){
     title("CHRONIQUES DE LA FAILLE");
     bool resumed=false;
     if(std::filesystem::exists("sauvegarde/savegame.txt")){std::cout<<"Sauvegarde d’équipe trouvée.\n1 Reprendre\n2 Nouvelle équipe\n> ";if(ask(1,2)==1)resumed=SaveSystem::load(team,progress);}
+    if(resumed && std::none_of(team.begin(), team.end(), [](const Player& hero) { return hero.alive(); })){
+        std::cout<<"Aucun survivant : cette campagne est terminée.\n1 Créer une nouvelle équipe\n0 Quitter\n> ";
+        if(ask(0,1)==0) return;
+        resumed=false;
+    }
     if(!resumed)createTeam();
     hub();
     std::cout<<"Merci d’avoir écrit cette légende.\n";

@@ -19,6 +19,7 @@ static bool readItem(std::ifstream& in, Item& item){
 }
 
 bool save(const std::vector<Player>& team, const Progress& progress, const std::string& file){
+    if(team.size() != 3) return false;
     std::filesystem::create_directories(std::filesystem::path(file).parent_path());
     std::ofstream out(file);
     if(!out) return false;
@@ -50,8 +51,9 @@ bool load(std::vector<Player>& team, Progress& progress, const std::string& file
     std::string marker;
     if(!(in >> marker) || marker != "CHRONIQUES_SAVE_V3") return false;
     size_t teamSize;
-    if(!(in >> teamSize) || teamSize == 0 || teamSize > 3) return false;
-    team.clear();
+    if(!(in >> teamSize) || teamSize != 3) return false;
+    std::vector<Player> loadedTeam;
+    loadedTeam.reserve(teamSize);
     for(size_t index=0; index<teamSize; ++index){
         Player hero;
         int classId, element;
@@ -64,7 +66,7 @@ bool load(std::vector<Player>& team, Progress& progress, const std::string& file
         size_t itemCount;
         if(!(in >> itemCount)) return false;
         for(size_t itemIndex=0; itemIndex<itemCount; ++itemIndex){Item item;if(!readItem(in,item))return false;hero.inventory.push_back(item);}
-        team.push_back(std::move(hero));
+        loadedTeam.push_back(std::move(hero));
     }
     size_t questCount;
     if(!(in >> questCount)) return false;
@@ -75,7 +77,12 @@ bool load(std::vector<Player>& team, Progress& progress, const std::string& file
             >> quest.goal >> quest.progress >> quest.xp >> quest.gold >> quest.completed >> quest.claimed)) return false;
         quests.push_back(quest);
     }
-    for(auto& hero:team) hero.quests=quests;
-    return static_cast<bool>(in >> progress.dungeon1 >> progress.dungeon2 >> progress.dungeon3 >> progress.dungeon4 >> progress.arenaBestWave);
+    for(auto& hero:loadedTeam) hero.quests=quests;
+    Progress loadedProgress;
+    if(!(in >> loadedProgress.dungeon1 >> loadedProgress.dungeon2 >> loadedProgress.dungeon3
+        >> loadedProgress.dungeon4 >> loadedProgress.arenaBestWave)) return false;
+    team=std::move(loadedTeam);
+    progress=loadedProgress;
+    return true;
 }
 }
