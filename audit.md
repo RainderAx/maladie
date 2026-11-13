@@ -1,152 +1,174 @@
-# Audit de `RainderAx/maladie` — « Chroniques de la Faille »
+# Audit de `RainderAx/maladie` — « Chroniques de la Faille » (v2)
 
-> **Référence auditée :** https://github.com/RainderAx/maladie — branche `main`, commit `f966f1d509ba366cc3bb59ccfe268d9e6d044bc6` (« dude »), 2 commits au total. Audit réalisé le 13/11/2026 sur un clone propre, `git status` vide avant et après build.
-> **Méthode :** lecture intégrale des 19 fichiers `src/` et des 22 headers `include/`, lecture de `readme.md`, `docs/README_CLASSES.md`, `docs/BESTIAIRE.md` (début) et `legacy.md` (début) — `guide.md` non lu, build avec le `Makefile` du dépôt, quatre tests dynamiques reproductibles (voir plus bas), un build AddressSanitizer/UBSan en copie temporaire.
-> **Limites :** Linux uniquement (g++ 13.3.0, GNU Make). Pas testé : clang, MSVC/MinGW, macOS, affichage visuel du terminal (alignement des cadres). Le dossier `legacy/` n'a été examiné qu'en surface (README : « non compilé »). Aucun correctif appliqué : l'audit était seul demandé, le dépôt distant n'est pas modifié.
+> **Référence auditée :** https://github.com/RainderAx/maladie — branche `main`, commit `4b5d5fb9e509bd14a3f0122ad812970aa023c52f` (« a »), 4 commits au total. Audit du 13/11/2026 sur un clone propre ; `git status` vide avant et après les builds.
+> **Audit précédent :** commit `f966f1d` (archivé dans `previous/audit_f966f1d.md`). Depuis, 2 commits ont ajouté **+2 246 lignes** : mode roguelite « Némésis », interface graphique Raylib, CMake, tests.
+> **Méthode :** lecture de tous les fichiers ajoutés/modifiés (`RogueliteSystem`, `RogueliteSaveSystem`, `CombatRules`, `HeroFactory`, `RaylibGame.cpp`, `CMakeLists.txt`, `Makefile`, tests, README, `AMELIORATIONS.md`), diff avec `f966f1d`, build CMake (terminal + tests), `ctest`, et 3 programmes de test ciblés écrits pour confirmer chaque défaut cité comme « confirmé ».
+> **Limites :** **le binaire graphique n'a pas été compilé ni lancé** (Raylib 5.5 absent de l'environnement, pas d'écran) : tout ce qui touche au rendu est de la lecture statique. Linux/g++ 13.3 seulement. CMake 4.4.4 installé localement pour l'audit (absent par défaut).
 
 ---
 
 ## Synthèse exécutive
 
-Petit RPG console en C++17 (~1 000 lignes utiles), **bien découpé** (hiérarchie de classes + factory, systèmes séparés) et qui **compile sans aucun avertissement** avec `-Wall -Wextra -pedantic`. La base est saine pour un projet de cette taille.
+Le dépôt a gagné une vraie couche de **tests (12 scénarios, tous verts)**, un **`CMakeLists.txt`**, une **séparation règles/affichage** (`CombatRules`, `RogueliteSystem` sans I/O) et un **chargeur de sauvegarde bien plus strict** que celui de la campagne. Le build terminal + tests passe **sans aucun avertissement** (`-Wall -Wextra -pedantic`).
 
-Les problèmes se concentrent sur quatre points :
+Mais le nouveau mode introduit des défauts de logique qui touchent sa promesse centrale, et **la quasi-totalité des défauts de l'audit précédent est toujours là** :
 
-1. **Un blocage réel : entrée standard fermée (EOF) ⇒ boucle infinie** qui a produit 205 Mo de texte en 3 secondes (`Terminal.hpp:9`).
-2. **Des erreurs de logique de jeu confirmées par test** : la quête « Premier éclat » se termine au premier *coup* et non à la première victoire ; Pile Face dépasse le plafond de chance critique dès le niveau 1 ; un héros K.O. est « ressuscité » par une montée de niveau mais jamais par le repos.
-3. **Un accès hors bornes** (détecté par ASan) quand une sauvegarde contient moins de 3 héros, alors que le chargeur l'autorise.
-4. **Une documentation qui ne correspond plus au code** : CMake est documenté mais `CMakeLists.txt` n'existe pas ; les docs se contredisent sur l'élément Ombre ; `legacy.md` décrit une architecture disparue.
+1. **Perte de run silencieuse (confirmé)** : un héros mort a des PV négatifs ; `saveRun` l'écrit, mais `loadRun` le **refuse** (`RogueliteSaveSystem.cpp:49`). Toute run avec un héros tombé ne peut plus être reprise après redémarrage.
+2. **Les héros morts ressuscitent (confirmé)** : contraire au README (« Les héros tués ne reviennent pas »), une victoire donne de l'XP aux morts (`RogueliteSystem.cpp:264-267`) et `gainXp` les remet à pleine vie.
+3. **Le rival Némésis a des PV incohérents (confirmé)** : ses PV sont figés à la valeur de la 1ʳᵉ mort et réinjectés au combat à chaque mort suivante.
+4. **Équipement « volé » mais bonus conservé (confirmé)** : l'objet vide garde l'élément du héros, donc +4 ATK / +4 DEF / +5 % critique persistent.
+5. **Boucle infinie sur EOF toujours présente (confirmé, 139 Mo en 3 s)**.
 
-**Priorités :** (1) gérer l'EOF dans `Terminal::ask`, (2) corriger quête / chance critique / résurrection, (3) rendre cohérents `load()` et les `ask(1,3)`, (4) réaligner la documentation (ou ajouter le `CMakeLists.txt`), (5) sortir `savegame.txt` et les binaires `legacy/` du suivi Git.
+**Priorités :** (1) borner les PV à 0 et accepter 0 au chargement, (2) ne jamais donner d'XP aux morts, (3) corriger l'EOF, (4) corriger quête / Pile Face / bornes du chargeur de la campagne (inchangés), (5) rendre le build par défaut utilisable sans Raylib.
+
+---
+
+## Suivi des constats de l'audit précédent (`f966f1d` → `4b5d5fb`)
+
+| Constat précédent | État | Preuve |
+|---|---|---|
+| `CMakeLists.txt` documenté mais absent | **Corrigé** | `CMakeLists.txt` (47 lignes) |
+| Aucun test | **Partiellement corrigé** | `tests/roguelite_tests.cpp`, `ctest` : 1/1 passé |
+| Tâche VS Code compilant `${file}` | **Corrigé** | `.vscode/tasks.json` → `make` |
+| Makefile sans dépendances headers / CRLF | **Remplacé** | Makefile = enveloppe CMake (voir constat build) |
+| Boucle infinie sur EOF (`Terminal.hpp:9`) | **Non corrigé** | Rejoué : 138 797 445 octets en 3 s |
+| Quête validée au 1ᵉʳ coup (`CombatSystem.cpp:87`) | **Non corrigé** | ligne inchangée dans le diff |
+| Pile Face : chance 35 + 35, plafonnée 60 | **Non corrigé** | `HeroFactory.cpp:31` + `PileFace.cpp:10` |
+| Résurrection par `gainXp` | **Non corrigé, étendu au mode roguelite** | test T6 ci-dessous |
+| `load()` accepte 1-3 héros, menus `ask(1,3)` | **Non corrigé** | `SaveSystem.cpp` absent du diff |
+| Équipement remplacé détruit (`Game.cpp`) | **Non corrigé** | inchangé |
+| Fuite contre un boss = attaque silencieuse | **Non corrigé** | `CombatSystem.cpp:57,70` |
+| Arène : tirage sur les 20 ennemis dès la vague 1 | **Non corrigé** | `ArenaSystem.cpp` inchangé |
+| Contradiction Ombre dans la doc | **Partiel** : `readme.md` réécrit, mais `docs/README_CLASSES.md` garde `Ombre \| Eau` | fichier absent du diff |
+| `docs/README_CLASSES.md` / `legacy.md` obsolètes | **Non corrigé** | absents du diff |
+| `savegame.txt` et binaires `legacy/` suivis par Git | **Non corrigé** (voir nuance fixture) | `git ls-files sauvegarde legacy` |
+| Écriture de sauvegarde non atomique | **Non corrigé, reproduit** dans les nouveaux fichiers | `RogueliteSaveSystem.cpp:91` |
 
 ---
 
 ## Objectif, fonctionnement et fonctionnalités observées
 
-Jeu de rôle au tour par tour dans le terminal : équipe de **3 héros** (nom, classe parmi 10, élément parmi 4), hub, **4 donjons** (2 salles + boss, le donjon 3 enchaîne un second boss ; le donjon 4 est optionnel), **arène infinie** par vagues, boutique, inventaire/équipement, une quête, sauvegarde automatique (format texte `CHRONIQUES_SAVE_V3`).
+Deux modes dans un même dépôt :
 
-Fonctionnalités annoncées et **retrouvées dans le code** : éléments (×1,5 / ×0,75), bonus d'équipement assorti (+4 ATK/DEF, +5 % critique), +15 % PV ennemis / +30 % boss (`CombatSystem.cpp:38`), sauvegarde V3, bestiaire (les valeurs du `docs/BESTIAIRE.md` correspondent à `EnemyFactory.cpp`).
+- **Campagne terminal** (inchangée sauf refactor `createHero` / `CombatRules`) : 3 héros, 4 donjons, arène, boutique, quête, sauvegarde V3.
+- **Roguelite graphique Raylib** (nouveau) : roster persistant de 3 héros, atelier d'améliorations payées en fragments, run de 4 salles + boss, récompense potion/repos, **rivaux Némésis** (un ennemi qui tue un héros vole arme + armure et grandit), checkpoints à chaque salle, `--terminal` pour basculer vers la campagne.
 
-Annoncées mais **introuvables dans ce dépôt** : `CMakeLists.txt`, `include/characters/CharacterClasses.hpp`, avantage d'Ombre sur Eau (voir constats), tout test automatisé.
+Fonctionnalités annoncées et retrouvées : barème Némésis (`+ATQ arme`, `+DEF armure`, `+10×niveau PV max`, `+2 critique plafonné 60 %` — `RogueliteSystem.cpp:67-70`), coûts d'amélioration (`4 + 2×rang` / `6 + 2×rang`, caps 5/8/8 — `:33-35,111-123`), sélection d'ennemis reproductible par graine et paliers de puissance (`:167-198`), plafonds de validation de sauvegarde.
+
+Annoncée mais **contredite par le code** : « Les héros tués ne reviennent pas pendant la run » (voir C2).
+Non vérifiable ici : tout le rendu et les interactions de l'UI.
 
 ---
 
 ## Architecture actuelle
 
 ```
-main.cpp                  → instancie Game
-include/{core,characters,entities,systems}/*.hpp
-src/{characters,entities,systems}/*.cpp
-docs/  sauvegarde/  legacy/
+main.cpp              → Raylib (ou --terminal)         src/terminal_main.cpp → campagne seule
+include|src/core      Types, Player, Terminal, HeroFactory (nouveau)
+include|src/characters hiérarchie de 11 classes + factory
+include|src/entities  EnemyFactory (+ fonctions d'éléments, toujours mal placées)
+include|src/systems   Combat, CombatRules (nouveau), Dungeon, Arena, Game, SaveSystem,
+                      RogueliteSystem (nouveau), RogueliteSaveSystem (nouveau)
+include|src/ui        RaylibGame (626 lignes, une classe)
+tests/                roguelite_tests.cpp (329 lignes, 12 scénarios)
 ```
 
-| Zone | Rôle | Évaluation |
-|---|---|---|
-| `characters/` | Chaîne d'héritage `CharacterClass → Guerrier → Berserker → Paladin`, etc. + `CharacterFactory` | Propre, polymorphe, `shared_ptr` sans `new` brut |
-| `core/` | `Player`, `Types`, `Terminal` | `Player` mélange état et règles de stats (acceptable) |
-| `entities/EnemyFactory` | Données ennemis | Contient aussi des fonctions déclarées dans `Types.hpp` (voir constat) |
-| `systems/` | Combat, donjon, arène, sauvegarde, `Game` | `Game.cpp` en lignes très denses |
-
-Cohérence avec la taille du projet : bonne. Pas de sur-ingénierie.
-
-**Forces observées :** compilation sans warning sous options strictes ; `enum class Element` ; sérialisation avec `std::quoted` (noms avec espaces/guillemets sûrs) ; en-tête de version dans la sauvegarde ; validation des entrées numériques dans `ask()` (hors EOF) ; documentation abondante (bestiaire, classes, éléments) ; aucune dépendance externe.
+Points forts : cœur métier (`RogueliteSystem`, `CombatRules`) **sans I/O**, donc testable ; RNG **injecté** (`std::mt19937&`) dans le nouveau code ; `game_core` en bibliothèque partagée entre terminal, GUI et tests ; validation de sauvegarde exhaustive.
+Point faible : `RaylibGame.cpp` mélange dessin, saisie, orchestration de scènes et appels de sauvegarde dans une seule classe.
 
 ---
 
 ## État de build et vérifications
 
 - **Commandes exécutées :**
-  - `make` → exit 0, binaire `chroniques_de_la_faille` (≈173 Ko), aucune ligne `warning`/`error`.
-  - `make -B | grep -E "warning|error"` → vide.
-  - T1 : `./chroniques_de_la_faille < /dev/null` (avec `timeout 3`).
-  - T2 : partie scriptée (3 héros Guerrier/Eau, un seul coup puis fuite, puis menu Quêtes).
-  - T3 : mini-programme lié aux sources pour `criticalChance()` et `gainXp()`.
-  - T4 : build `-fsanitize=address,undefined` + sauvegarde éditée à 1 héros, menu Sac, héros n°3.
-- **Résultats :**
-  - T1 → exit 124 (timeout), 205 338 015 octets produits (« Choix invalide. Recommencez : » en boucle).
-  - T2 → « A inflige 41 dégâts. » puis « Quête accomplie : Premier éclat » alors que l'ennemi est vivant ; après la fuite, la quête affiche `[TERMINÉE] 1/1`.
-  - T3 → `PileFace lvl1: chance=35 luckBonus=35 crit effective=60` ; `Guerrier: crit=15` ; héros à PV −5 : `alive=0` avant, `alive=1 level=5 hp=172` après `gainXp(1000)`.
-  - T4 → `heap-buffer-overflow` dans `Game::inventory()` (`Game.cpp:63`).
-- **Outillage :** g++ 13.3.0 (Ubuntu 24.04), GNU Make 4.x, `-std=c++17 -Wall -Wextra -pedantic -O2`.
-- **Limites d'exécution :** les tests T1/T2/T4 ont été lancés dans une **copie** du dépôt (`/tmp/work`) pour ne pas modifier `sauvegarde/savegame.txt`, qui est suivi par Git.
+  - `make` (cible par défaut) → **échec** : `make: cmake: No such file or directory`, `Error 127`.
+  - Après `pip install cmake` : `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_GRAPHICAL_GAME=OFF` puis `cmake --build build -j4` → `game_core`, `chroniques_de_la_faille_terminal`, `roguelite_tests` construits, **0 warning**.
+  - `ctest --test-dir build --output-on-failure` → `100% tests passed out of 1`.
+  - T1 : `chroniques_de_la_faille_terminal < /dev/null` (timeout 3 s) → 138 797 445 octets.
+  - T5/T6 : programmes de test liés à `game_core` (voir C1-C4).
+- **Non exécuté :** cible `chroniques_de_la_faille` (Raylib 5.5 requis par `CMakeLists.txt:33`, absent).
+- **Outillage :** g++ 13.3.0 ; CMake 4.4.4 (ajouté pour l'audit) ; `-std=c++17`.
 
 ---
 
 ## Constats priorisés
 
-### Structure et architecture
+### Code, logique et erreurs (nouveau mode)
 
-> **[Moyen]** `include/core/Types.hpp:6-9` / `src/entities/EnemyFactory.cpp:20-28` — `elementName`, `elementFromId`, `elementId`, `elementMultiplier` sont déclarées dans `Types.hpp` mais **définies dans `EnemyFactory.cpp`**. **Effet :** une règle centrale (éléments) est cachée dans un fichier de contenu ; un projet de test qui ne lierait pas `EnemyFactory.cpp` ne se lierait plus. **Recommandation :** créer `src/core/Types.cpp` et y déplacer ces 4 fonctions (aucun changement de comportement).
+> **[Élevé] C1 — Une run avec un héros mort ne peut pas être rechargée.**
+> `src/systems/RogueliteSystem.cpp:250` fait `target.hp -= dégâts` sans borne ; un héros tué a donc des PV négatifs. `RogueliteSaveSystem.cpp:48-50` rejette `hero.hp < 0` au chargement alors que `saveRun` (`:134-151`) n'a **aucun** contrôle équivalent. **Confirmé (T5a)** : `hp=-17` → `saveRun=1`, `loadRun=0` ; `hp=0` → `loadRun=1`.
+> **Effet :** la sauvegarde de récompense (`RaylibGame.cpp:476-477`) puis le checkpoint de la salle suivante (`:429-430`) écrivent ces PV négatifs ; au prochain lancement `loadState()` (`:123`) reçoit `false`, **la reprise disparaît sans message** et la run est perdue.
+> **Correction :** `target.hp = std::max(0, target.hp - damage)` (`RogueliteSystem.cpp:250`) **et** valider `hp >= 0` à l'écriture pour que `saveRun` échoue au lieu de produire un fichier illisible. Ajouter un test « run avec un héros mort : save → load ».
 
-> **[Moyen]** `CombatSystem.cpp:16`, `Game.cpp:38-39,76-78`, `SaveSystem.cpp:36` — les quêtes sont copiées sur chaque héros mais seul `team.front().quests` fait foi. **Effet :** état dupliqué à resynchroniser à la main (`Game.cpp:39,78`) ; fragile si l'ordre de l'équipe change. **Recommandation :** introduire une structure `GameState { team; quests; Progress; }` possédée par `Game`, passée aux systèmes.
+> **[Moyen] C2 — Les héros morts reviennent à la vie en montant de niveau.**
+> `RogueliteSystem.cpp:264-267` donne or et XP à **tous** les héros ; `Player::gainXp` (`Player.hpp:30`) remet `hp = maxHp` à chaque niveau sans tester `alive()`. **Confirmé (T6)** : un héros à −12 PV passe `alive=0` → `alive=1`, niveau 2, 143 PV après une victoire (ennemi à 117 XP). Le README et `AMELIORATIONS.md` annoncent le contraire. Même défaut qu'en campagne (audit précédent), désormais au cœur de la promesse « roguelite ».
+> **Correction :** donner l'XP uniquement aux héros vivants dans `resolveEncounterVictory` (et `CombatSystem.cpp:106`, `ArenaSystem.cpp:19`), ou faire de `gainXp` un no-op si `!alive()`.
 
-> **[Faible]** `Game.cpp:63-66,83-102`, `EnemyFactory.cpp:5-16` — lignes très denses (plusieurs instructions par ligne, tableaux d'ennemis sur une seule ligne). **Effet :** relecture et diff difficiles. **Recommandation :** un `clang-format` + sortir les statistiques ennemis dans une table lisible (ou fichier JSON/CSV local).
+> **[Moyen] C3 — PV du rival Némésis figés puis réinjectés.**
+> `promoteKiller` (`RogueliteSystem.cpp:91-102`) termine par `encounter.enemy = nemesis->enemy`. `nemesis.enemy.hp` n'est mis à jour qu'à la création (copie de l'ennemi blessé) et `stealEquippedItems` n'augmente que `maxHp`. **Confirmé (T5b)** : 1ʳᵉ mort : 126 → 112 PV ; 2ᵉ et 3ᵉ morts : le rival repart à **112** alors que le héros l'avait frappé pendant le même tour (PV max 136 → 146 → 156). Au réapparaître (`nextEncounter:174-176`) le rival reprend aussi ces PV figés.
+> **Effet :** les dégâts infligés entre deux morts sont annulés ; un rival peut revenir blessé ou, selon le moment, soigné de façon arbitraire. Non documenté dans la spec.
+> **Correction :** ne copier que les stats « de croissance » vers l'ennemi en combat (garder `hp`), et décider explicitement si un rival revient à pleine vie.
 
-### Code, logique et erreurs
+> **[Moyen] C4 — Équipement volé : les bonus élémentaires restent.**
+> `RogueliteSystem.cpp:65-66` remplace l'arme/armure par un `Item` vide dont l'élément est `victim.element` ; `Player::matchingEquipmentBonus` (`Player.hpp:19-24`) compare les éléments et accorde +4/+4, et `criticalChance` +5. **Confirmé (T5c)** : héros Guerrier/Feu, ATK 24 → 22 seulement (−2 de l'arme, aucun malus de −4), DEF 17 → 15, critique inchangé à 15 %. **T5d** : un héros déjà dépouillé, volé de nouveau, remplit le butin de **2 objets sans nom** (reversés dans le sac d'un survivant, `:277`).
+> **Correction :** représenter l'emplacement vide explicitement (`bool equipped` ou `std::optional<Item>`), ne pas voler un emplacement vide, ne pas attribuer le bonus assorti à un emplacement vide.
 
-> **[Élevé]** `include/core/Terminal.hpp:9` — `ask()` boucle indéfiniment si `std::cin` atteint EOF (le `clear()` + `ignore()` ne change rien à un flux terminé). **Effet :** confirmé par T1, 205 Mo de sortie en 3 s ; un `Ctrl-D` ou une entrée redirigée gèle le programme et sature le terminal. **Recommandation :** après l'échec de lecture, tester `std::cin.eof()` et quitter proprement (lever une exception rattrapée dans `main`, ou sauvegarder puis `std::exit`). Même traitement pour `std::getline` dans `Game.cpp:14`.
+> **[Moyen] C5 — `Échap` en combat annule les morts (et donc la mécanique Némésis).**
+> `RaylibGame.cpp:604-612` : en combat, `Échap` recharge `roomCheckpoint_` (comportement documenté dans le README). Après la mort d'un héros, le joueur annule simplement la salle ; le rival ne se forme jamais et aucune perte n'est subie. La graine de salle étant réinitialisée (`:427`), les jets sont même identiques à l'essai suivant à choix identiques. À arbitrer côté design (c'est voulu et documenté, mais cela vide la promesse « les morts comptent »).
 
-> **[Moyen]** `src/systems/CombatSystem.cpp:87` (et `:105`) — `updateQuestProgress(team,"vaincre")` est appelé **à chaque attaque** et encore une fois à la victoire. **Effet :** confirmé par T2 : « Premier éclat » (objectif « Vaincre votre premier adversaire ») se valide au premier coup, même si le joueur fuit ensuite ; avec un `goal` > 1 la progression serait comptée plusieurs fois par combat. **Recommandation :** supprimer l'appel de la ligne 87 et ne garder que celui de la victoire (`:105`).
+> **[Faible] C6 — Duplications de la définition des potions et des bornes.** « Potion solaire » est redéfinie dans `HeroFactory.cpp:39-40`, `RogueliteSystem.cpp:143-144` et `:297`, et `Game.cpp` (boutique). `maxHeroCount` existe en trois exemplaires (`RogueliteSystem.cpp:9`, `RogueliteSaveSystem.cpp:9`, bornes `3` en dur du terminal). **Correction :** une fabrique `makeSolarPotion()`, une constante partagée.
 
-> **[Moyen]** `src/systems/Game.cpp:28` + `src/characters/PileFace.cpp:10` + `include/core/Player.hpp:27` — Pile Face reçoit `chance=35` à la création **et** `luckBonus()=35` ; `criticalChance()` plafonne à 60 %. **Effet :** confirmé par T3, 70 → 60 % dès le niveau 1 : les `++chance` des montées de niveau n'ont plus aucun effet pour cette classe, le bonus de classe est en partie perdu. **Recommandation :** garder la chance de base à 10 (supprimer `hero.chance=35` ligne 28) ou retirer `luckBonus()`, et documenter la valeur voulue.
+### Code, logique et erreurs (campagne terminal — inchangés)
 
-> **[Moyen]** `include/core/Player.hpp:30`, `src/systems/Game.cpp:102`, `CombatSystem.cpp:104`, `ArenaSystem.cpp:19` — `gainXp()` remet `hp = maxHp` à chaque niveau gagné **sans tester `alive()`**, tandis que « Repos » ne soigne que les héros vivants et que les récompenses (XP) sont distribuées aussi aux K.O. **Effet :** confirmé par T3 : un héros à PV négatifs redevient vivant en montant de niveau, mais ne peut sinon jamais être relevé ; les PV négatifs sont affichés. **Recommandation :** trancher la règle (mort permanente, ou repos/potion de réanimation) ; ne donner l'XP qu'aux héros vivants ou bien appliquer le soin de niveau uniquement aux vivants ; borner `hp` à 0.
+Constats toujours valides ; détails dans `previous/audit_f966f1d.md` :
 
-> **[Moyen]** `src/systems/SaveSystem.cpp:53` vs `CombatSystem.cpp:30-32`, `Game.cpp:58-60,85-86` — `load()` accepte 1 à 3 héros, mais les menus demandent toujours `ask(1,3)` et indexent `team[choice-1]`. **Effet :** confirmé par T4 : `heap-buffer-overflow` (comportement indéfini) avec une sauvegarde éditée à 1 ou 2 héros. Non atteignable en jeu normal (création toujours 3 héros). **Recommandation :** soit exiger `teamSize == 3` dans `load()`, soit utiliser `static_cast<int>(team.size())` dans les bornes.
-
-> **[Moyen]** `src/systems/Game.cpp:66` — équiper un objet **supprime** l'équipement remplacé (`erase` sans remettre l'ancien dans l'inventaire). **Effet :** perte définitive d'armes/armures (dont celles achetées 120-180 or). Détection arme/armure par `item.attack>0` : un équipement à ATK=0 serait toujours classé « armure ». **Recommandation :** `std::swap` entre l'emplacement et l'objet de l'inventaire, et un champ explicite `slot` dans `Item`.
-
-> **[Moyen]** `src/systems/Game.cpp:100,102` + `SaveSystem` — après un « game over », `explore()` sauvegarde une équipe entièrement K.O. (`Game.cpp:95`) ; à la reprise, `hub()` sort immédiatement car personne n'est vivant. **Effet :** la partie est inutilisable (il faut choisir « Nouvelle équipe »). Déduit à la lecture, non rejoué. **Recommandation :** soit réanimer l'équipe à la place noire avec pénalité, soit afficher un écran de défaite et proposer explicitement de recommencer.
-
-> **[Faible]** `src/systems/CombatSystem.cpp:57,70-73` — « 4. Fuir » contre un boss n'est pas géré : le choix 4 tombe dans la branche d'attaque et lance une **attaque de base** sans message. **Effet :** option trompeuse. **Recommandation :** afficher « On ne fuit pas un boss » et `continue`.
-
-> **[Faible]** `src/systems/CombatSystem.cpp:71-73` — « Technique » n'a ni coût ni délai de recharge et inflige `attack + skillDamage + 0..4` contre `attack - 3..6` pour la frappe, plus un soin éventuel. **Effet :** Technique domine strictement la frappe ; le choix 1 n'est jamais utile (profondeur tactique nulle). **Recommandation :** ajouter un coût (énergie/mana ou recharge) — en supposant que ce soit l'intention de design.
-
-> **[Faible]** `src/systems/ArenaSystem.cpp:16` — l'ennemi est tiré au hasard parmi **les 20** du roster quelle que soit la vague. **Effet :** « Avatar de la Faille » (300 PV, ATK 50) peut apparaître à la vague 1. **Recommandation :** filtrer par palier de vague (ex. fenêtre glissante sur l'index trié par puissance).
-
-> **[Faible]** `src/systems/Game.cpp:87` — l'achat n'affiche aucune confirmation ; l'`else` et `autoSave()` sont sur la même ligne, ce qui prête à confusion. **Recommandation :** message de confirmation et mise en forme multi-lignes.
+| Priorité | Constat | Emplacement |
+|---|---|---|
+| **Élevé** | `ask()` boucle sans fin sur EOF (139 Mo / 3 s confirmé à nouveau) | `include/core/Terminal.hpp:9` |
+| Moyen | Quête « Premier éclat » validée au premier coup, pas à la victoire | `CombatSystem.cpp:87` (+`:107`) |
+| Moyen | Pile Face : `chance=35` + `luckBonus=35` ⇒ 60 % plafonné dès le niv. 1 | `HeroFactory.cpp:31`, `PileFace.cpp:10`, `Player.hpp:27` |
+| Moyen | `load()` accepte 1-3 héros, menus indexent `team[0..2]` (ASan : heap-buffer-overflow) | `SaveSystem.cpp:53`, `CombatSystem.cpp:32`, `Game.cpp:52,79` |
+| Moyen | Équiper un objet détruit l'ancien | `Game.cpp` (`inventory()`) |
+| Moyen | Équipe entièrement K.O. sauvegardée ⇒ reprise inutilisable | `Game.cpp` (`explore`, `hub`) |
+| Faible | « Fuir » contre un boss = attaque silencieuse | `CombatSystem.cpp:57,70-73` |
+| Faible | Arène : tirage parmi les 20 ennemis quelle que soit la vague | `ArenaSystem.cpp:16` |
+| Faible | Fonctions d'éléments définies dans `EnemyFactory.cpp:20-28` mais déclarées dans `Types.hpp` | — |
 
 ### Sécurité et fiabilité
 
-> **[Moyen]** `src/systems/SaveSystem.cpp:22-24` et `Game.cpp:10` — `save()` ouvre le fichier final en écriture (troncature immédiate) puis écrit ; la valeur de retour est ignorée par `autoSave()`. **Effet :** un crash ou un disque plein pendant l'écriture détruit la progression sans avertir. **Recommandation :** écrire dans `savegame.txt.tmp` puis `std::filesystem::rename`, et signaler l'échec à l'écran.
+> **[Moyen] F1 — Écritures non atomiques et retours ignorés (nouveaux fichiers).** `RogueliteSaveSystem.cpp:91` ouvre avec `std::ios::trunc` avant toute validation ; `saveProfile` peut ensuite retourner `false` à `:105` (rang invalide) en laissant un fichier **tronqué/partiel**. Dans l'UI, plusieurs appels ignorent le résultat (`RaylibGame.cpp:317,339-340,429-430,476-477,485-486`) et, à la fermeture, `persistCheckpoint()` écrit un message d'erreur dans `statusMessage_` (`:130-133`) juste avant `CloseWindow()` (`:90-91`) : l'erreur n'est **jamais affichée**. **Correction :** écrire dans `*.tmp` puis `std::filesystem::rename`, valider avant d'ouvrir, journaliser/afficher l'échec.
 
-> **[Faible]** `SaveSystem.cpp:57-66,79`, `CharacterFactory.cpp:27` — pas de validation des valeurs lues (niveau, PV, quantité d'objets) ; un `classId` inconnu devient silencieusement « Guerrier » ; `className` est stocké alors que `characterClass->name()` le fournit déjà. **Effet :** une sauvegarde corrompue ou éditée peut produire des états incohérents. **Recommandation :** valider les bornes, rejeter les `classId` hors 1-11, ne plus sérialiser `className` (recalculé au chargement).
+> **[Faible] F2 — Bon point : validation stricte au chargement.** `readPlayer`/`readEnemy`/`loadProfile`/`loadRun` bornent classes, éléments, niveaux, PV, plafonds et tailles (`RogueliteSaveSystem.cpp:9-12,48-50,78-79,117,157`) et ne remplacent l'état qu'après lecture complète (`:130,182`). À reprendre pour `SaveSystem.cpp` (campagne), qui n'a toujours aucune validation de valeurs.
 
-Pas de surface d'attaque réseau ni de traitement de données externes : le risque sécurité est proportionnellement faible (la seule entrée non fiable est le fichier de sauvegarde local).
+### Build, documentation, configuration et livraison
+
+> **[Moyen] B1 — La cible `make` par défaut exige CMake **et** Raylib 5.5.** `Makefile:3-5` (`all`) configure avec `-DBUILD_GRAPHICAL_GAME=ON`, et `CMakeLists.txt:33` utilise `find_package(raylib 5.5 CONFIG REQUIRED)` sans repli. **Constaté :** `make` échoue sur une machine sans CMake ; sans Raylib, `cmake` échouerait à la configuration. Auparavant, `make` ne demandait que `g++`. `make terminal`, `make test` passent aussi par CMake/CTest. **Correction :** détecter Raylib (`find_package(raylib 5.5 QUIET)` ou `FetchContent` optionnel) et construire le terminal si absent ; faire de `make` un alias de `make terminal` ou documenter clairement la procédure d'installation (apt/brew/vcpkg) dans le README.
+
+> **[Moyen] B2 — Le test de rétrocompatibilité lit la sauvegarde personnelle de l'utilisateur.** `tests/roguelite_tests.cpp:304` charge `sauvegarde/savegame.txt` (répertoire de travail `CMakeLists.txt:47`), fichier **suivi par Git, modifié par chaque partie de campagne** et contenant des noms réels (« Maladie », « Rachid »). Une partie jouée depuis la racine du dépôt peut donc faire échouer ou fausser le test. **Correction :** copier la fixture dans `tests/fixtures/campaign_v3.txt`, retirer `sauvegarde/savegame.txt` du suivi (`git rm --cached`), ignorer `sauvegarde/*.txt`.
+
+> **[Moyen] B3 — Documentation du dépôt encore en partie obsolète.** `docs/README_CLASSES.md` : tableau `Ombre | Eau | —` (contredit sa propre section « Neutralité d'Ombre » et le code), chemins `CharacterClasses.hpp/.cpp` et dossier `rpg-terminal/` inexistants ; `legacy.md` décrit l'architecture d'avant. Le `audit.md` **commité à la racine** (copie de l'audit précédent) est maintenant lui-même périmé (il affirme que `CMakeLists.txt` n'existe pas) et peut induire en erreur. **Correction :** supprimer ou déplacer vers `docs/` avec la date et le commit audités ; corriger `docs/README_CLASSES.md`.
+
+> **[Faible] B4 — Fins de ligne mixtes.** `src/systems/CombatSystem.cpp` (99 CRLF / 11 LF) et `src/systems/Game.cpp` (91 / 15) mélangent les deux ; 56 fichiers sont en CRLF pur, 23 en LF pur. Pas de `.gitattributes`. Les diffs contiennent des lignes « modifiées » qui ne le sont que par leur terminaison. **Correction :** `.gitattributes` (`* text=auto eol=lf`) puis normalisation en un commit dédié.
+
+> **[Faible] B5 — Hygiène Git.** Messages `dude` et `a` non descriptifs (le commit `78520dd` est correct) ; binaires ELF `legacy/HelloWorld` (39 Ko) et `legacy/jeu` (70 Ko) toujours suivis ; pas de `LICENSE` ; `roguelite_tests` compilé sans options de warning (`CMakeLists.txt:44-45`, contrairement à `game_core`).
+
+### UI/UX et accessibilité (lecture statique, **rendu non vérifié**)
+
+> **[Faible] U1 — Saisie des noms limitée à l'ASCII.** `RaylibGame.cpp:249` n'accepte que les codepoints 32-126 : impossible de nommer un héros « Élodie » ou « Inès » dans un jeu en français (la campagne terminal l'accepte). **Correction :** accepter les codepoints Latin-1 supplémentaires et encoder en UTF-8.
+
+> **[Faible] U2 — Polices et glyphes à vérifier.** L'UI utilise `DrawText` avec la police par défaut de Raylib et des chaînes contenant `’`, `—`, `•`, `É` (`RaylibGame.cpp:68,130,184,198,299,310,380`). La police par défaut n'inclut pas tous ces symboles : des « ? » pourraient s'afficher. **Non vérifié** (pas d'exécution graphique). **Correction :** charger une police avec `LoadFontEx` et la plage de glyphes nécessaire, ou limiter le texte aux caractères disponibles.
+
+> **[Faible] U3 — Fenêtre minimale = fenêtre par défaut en hauteur** (`SetWindowMinSize(960, 760)` pour `760` de haut à l'ouverture) : aucune mise en page réduite possible sur un petit écran portable. À tester sur écran 768 px.
 
 ### Performance
 
-Aucun point préoccupant : `arenaRoster()` reconstruit 20 ennemis à chaque vague (`ArenaSystem.cpp:15`), coût négligeable ; deux générateurs `std::mt19937` distincts (`CombatSystem.cpp:6`, `ArenaSystem.cpp:13`) sans conséquence fonctionnelle. À ne pas optimiser.
-
-### UI/UX et accessibilité
-
-> **[Faible]** `include/core/Terminal.hpp:8` — `title()` calcule l'alignement avec `text.size()` en **octets** UTF-8 (« ARÈNE », « É »…) et peut passer une largeur négative à `setw` pour un titre de plus de 60 caractères. **Effet :** cadres potentiellement mal alignés (non vérifié visuellement). **Recommandation :** compter les caractères Unicode ou centrer sans cadre dynamique ; prévoir une option sans codes ANSI (`NO_COLOR`).
-
-### Documentation, configuration et livraison
-
-> **[Moyen]** `readme.md` (section « Compilation »), `docs/README_CLASSES.md` (arborescence et section « Compilation ») — documentent `cmake -S . -B build`, mais **aucun `CMakeLists.txt`** n'existe (`ls CMakeLists.txt` : introuvable). **Effet :** la commande documentée échoue pour tout nouveau lecteur. **Recommandation :** soit ajouter un `CMakeLists.txt` minimal (voir « Ajouts »), soit supprimer ces paragraphes.
-
-> **[Moyen]** `readme.md` (section « Équipe et éléments ») et `docs/README_CLASSES.md` (tableau des éléments : `Ombre | Eau | —`) — annoncent que **Ombre est avantageux contre Eau**. Le code (`EnemyFactory.cpp:24-28`) et la dernière section de `README_CLASSES.md` / `BESTIAIRE.md` disent qu'Ombre est **neutre**. **Effet :** trois documents sur quatre se contredisent ; le code fait foi. **Recommandation :** retirer la ligne Ombre du tableau et la phrase du README.
-
-> **[Moyen]** `docs/README_CLASSES.md` — cite `include/characters/CharacterClasses.hpp`, `src/characters/CharacterClasses.cpp` et un dossier racine `rpg-terminal/` qui n'existent pas ; `legacy.md` décrit un `main.cpp` « contenant les systèmes », des voies « Sentinelle/Arcaniste/Nocturne » et `savegame.txt` à la racine. **Effet :** documentation d'une version antérieure. **Recommandation :** corriger l'arborescence, et fusionner/archiver `legacy.md` (voir plus bas). Remarque : `guide.md` (11 Ko) n'a pas été utilisé pour établir les constats.
-
-> **[Moyen]** `.gitignore:1-2`, `sauvegarde/savegame.txt` — le fichier de sauvegarde (noms de héros réels comme « Maladie », « Rachid », partie à 235 or) est **suivi par Git**, alors que le README le décrit comme « généré automatiquement » ; chaque partie le modifie. **Effet :** pollution du dépôt et fuite de données personnelles de jeu. **Recommandation :** `git rm --cached sauvegarde/savegame.txt` et ajouter `sauvegarde/*.txt` au `.gitignore` (garder `.gitkeep`).
-
-> **[Faible]** `legacy/HelloWorld` (39 Ko) et `legacy/jeu` (70 Ko) — binaires ELF compilés, committés. **Effet :** poids inutile, non reproductibles. **Recommandation :** les retirer du suivi et ajouter les noms au `.gitignore`.
-
-> **[Faible]** Historique Git : 2 commits (« first commit », « dude ») ; pas de fichier `LICENSE`. **Recommandation :** messages explicites, choisir une licence si le dépôt est destiné à être partagé.
+Rien de préoccupant ; `nextEncounter` reconstruit et trie 20 ennemis à chaque salle (`RogueliteSystem.cpp:179-189`), négligeable.
 
 ### Tests et expérience développeur
 
-> **[Moyen]** *Aucun test* (`test_path_candidates` vide). Aucune graine injectable : `std::random_device` est utilisé directement (`CombatSystem.cpp:6`, `ArenaSystem.cpp:13`), donc les combats ne sont pas reproductibles. **Effet :** les régressions comme celles ci-dessus ne sont pas détectables automatiquement. **Recommandation :** (1) tests unitaires sur `elementMultiplier`, `Player::criticalChance`, `Player::gainXp`, aller-retour `SaveSystem::save/load` (exécutable simple avec `assert`, sans dépendance) ; (2) un RNG partagé initialisable par graine ; (3) cible `make test`.
+> **[Moyen] T1 — Les tests ne couvrent pas les défauts trouvés.** 12 scénarios vérifient les achats, les fragments, le butin Némésis, la reproductibilité et l'aller-retour de sauvegarde, mais aucun ne teste : un héros mort dans une sauvegarde de run (C1), l'XP des morts (C2), les PV du rival après plusieurs morts (C3), le bonus d'un emplacement vide (C4), `Player::criticalChance`, `Terminal::ask` ou l'EOF. **Correction :** ajouter ces 5-6 tests (chacun < 15 lignes) ; le harnais maison `CHECK` suffit.
 
-> **[Faible]** `Makefile:8` — `$(TARGET): $(SOURCES)` ne liste pas les headers : modifier un `.hpp` seul ne déclenche pas de recompilation (piège en cas de build incrémental). Pas de `.o` intermédiaires : tout est recompilé à chaque fois. Fichier en fins de ligne CRLF (59 des 69 fichiers suivis le sont, sans `.gitattributes`). **Recommandation :** objets séparés avec `-MMD -MP`, `.gitattributes` (`* text=auto eol=lf`).
-
-> **[Faible]** `.vscode/tasks.json` — la tâche par défaut compile `${file}` seul : elle échoue dès qu'on l'applique à un `.cpp` du projet (includes relatifs, plusieurs unités). **Recommandation :** faire de « Build and run C++ project » (`make`) la tâche par défaut. Par ailleurs `src/*` mélange `#include "CharacterClass.hpp"` (dépend des `-I` du Makefile) et `#include "../../include/…"` : harmoniser sur une seule convention (`-Iinclude` + `#include "core/Player.hpp"`).
-
-### Données / IA
-
-Sans objet : aucun modèle ni jeu de données (les « Technique » sont du polymorphisme C++, pas de l'IA).
+> **[Faible] T2 — Exécutable de test unique.** `roguelite_tests.cpp` rassemble tout dans un `main` ; un échec masque les suivants. **Correction :** un seul fichier est acceptable à cette taille, mais faire retourner la liste complète des échecs (ou découper par thème).
 
 ---
 
@@ -154,48 +176,51 @@ Sans objet : aucun modèle ni jeu de données (les « Technique » sont du polym
 
 | Élément | Rôle observé | Décision recommandée | Condition |
 |---|---|---|---|
-| `legacy/HelloWorld`, `legacy/jeu` | binaires ELF de l'ancien prototype | Retirer du suivi Git | Aucune dépendance dans le Makefile (vérifié) |
-| `sauvegarde/savegame.txt` | sauvegarde de partie personnelle | Retirer du suivi, ignorer | Garder `sauvegarde/.gitkeep` |
-| `legacy/*.cpp`, `legacy/*.hpp`, `legacy.md` | prototype d'origine, « non compilé » (`legacy/main.legacy.cpp` échoue d'ailleurs à `g++ -fsyntax-only`) | Archiver dans un tag Git (`legacy-v0`) puis supprimer du dossier **seulement si vous n'en avez plus besoin** | Votre décision : rôle de référence personnelle inconnu |
-| `guide.md` | rôle non établi (non exploité dans cet audit) | Relire ; fusionner dans `readme.md` si redondant | À confirmer par l'auteur |
-| `Terminal::title` + éléments dans `EnemyFactory.cpp` | voir constats | Déplacer (pas supprimer) | — |
+| `audit.md` (racine, copie de l'audit v1) | rapport devenu obsolète | Déplacer vers `docs/audits/` avec commit audité, ou supprimer | Vous seul savez si vous voulez conserver l'historique |
+| `sauvegarde/savegame.txt` | sauvegarde personnelle **et** fixture de test | Copier en `tests/fixtures/`, retirer du suivi | À faire en même temps que B2 |
+| `legacy/HelloWorld`, `legacy/jeu` | binaires ELF | Retirer du suivi | Aucun usage dans CMake/Makefile |
+| `legacy.md`, `legacy/*` | prototype d'origine | Archiver dans un tag, puis supprimer | Décision de l'auteur |
+| `AMELIORATIONS.md` | journal des changements | Conserver (utile) ; vérifier ses affirmations, voir C2 | — |
+| `docs/superpowers/specs/…` | spec de conception du roguelite | Conserver | — |
 
 ## Scripts et outils
 
 | Élément | Rôle observé | Évaluation | Recommandation |
 |---|---|---|---|
-| `Makefile` | build, `run`, `clean` | Fonctionne ; pas de dépendances headers ; CRLF | Ajouter `-MMD`, cible `test` |
-| `.vscode/tasks.json` | 2 tâches (`${file}` et `make`) | La première est inadaptée au projet | Rendre `make` par défaut |
-| `.vscode/settings.json` | associations de fichiers C++ | Générée par l'éditeur, sans enjeu | Peut être ignorée par Git si souhaité |
-| CI / tests / linter | **introuvables dans ce dépôt** | — | Voir « Ajouts » |
+| `CMakeLists.txt` | `game_core`, terminal, GUI optionnelle, tests | Bonne structure ; Raylib sans repli | Voir B1 |
+| `Makefile` | alias vers CMake (`all`, `terminal`, `test`, `clean`…) | Pratique mais dépend de CMake/CTest | Documenter/prévoir repli |
+| `.vscode/tasks.json` | `make` / `make run` | Corrigé | — |
+| `tests/roguelite_tests.cpp` | 12 scénarios métier | Verts ; couverture lacunaire | Voir T1 |
+| CI | **introuvable dans ce dépôt** | — | GitHub Actions gratuit : `cmake` terminal + `ctest` |
 
 ## Refactorings recommandés
 
 | Problème actuel | Structure actuelle → cible | Bénéfice | Difficulté | Nécessité |
 |---|---|---|---|---|
-| Fonctions d'éléments dans `EnemyFactory.cpp` | `EnemyFactory.cpp` → `src/core/Types.cpp` | Cohérence, testabilité | Faible | Recommandée |
-| Quêtes dupliquées sur 3 héros | `Player::quests` ×3 → `GameState::quests` | Un seul état de vérité | Moyenne | Recommandée |
-| Menus avec `ask(1,3)` en dur | constante 3 → `team.size()` | Supprime l'accès hors bornes | Faible | Essentielle |
-| Données ennemis dans le code | tableaux inline → table/fichier de données | Équilibrage sans recompiler | Moyenne | Optionnelle |
-| Lignes denses `Game.cpp` | one-liners → fonctions courtes + `clang-format` | Lisibilité | Faible | Recommandée |
+| Emplacement d'équipement vide = objet fantôme | `Item` vide → `std::optional<Item>` / `bool equipped` | Supprime C4 et T5d | Moyenne | Recommandée |
+| Règle de mort dispersée (3 endroits) | XP/soin à chaque boucle → `Player::gainXp` ignore les morts + PV bornés à 0 | Supprime C1, C2 | Faible | **Essentielle** |
+| Rival : état « en combat » ≠ état « persistant » | copie complète de l'ennemi → séparation `NemesisState` / `Enemy` en combat | Supprime C3 | Moyenne | Recommandée |
+| `RaylibGame.cpp` monolithique (626 lignes) | 1 classe → scènes séparées (`MenuScene`, `CombatScene`…) | Lisibilité, tests UI | Moyenne | Optionnelle |
+| Potions et constantes dupliquées | littéraux répétés → `Items::solarPotion()` | Cohérence | Faible | Recommandée |
+| Fonctions d'éléments dans `EnemyFactory.cpp` | → `src/core/Types.cpp` | Cohérence | Faible | Recommandée |
 
 ## Ajouts potentiels
 
-- **Essentiel :** gestion de l'EOF ; tests unitaires minimaux (éléments, critique, XP, aller-retour de sauvegarde).
-- **Recommandé :** `CMakeLists.txt` minimal (ou retrait de la doc CMake) ; `.gitattributes` ; écran de défaite explicite ; message d'erreur si la sauvegarde échoue.
-- **Optionnel :** RNG à graine (`--seed N`) pour rejouer un combat ; `clang-format`/`clang-tidy` locaux ; GitHub Actions gratuit pour `make && make test`.
-- **Expérimental :** coût de compétences/ressources ; difficulté de l'arène par paliers.
+- **Essentiel :** correction C1-C2 + EOF ; tests de non-régression correspondants.
+- **Recommandé :** repli de build sans Raylib ; fixture de test dédiée ; sauvegarde atomique ; message d'erreur visible si l'enregistrement échoue ; CI.
+- **Optionnel :** noms accentués et police complète dans l'UI ; un indicateur « Reprise impossible : sauvegarde illisible » plutôt que la disparition silencieuse du bouton.
+- **Expérimental :** pénalité à `Échap` en combat (ex. perte d'une potion), pour préserver la tension du système Némésis.
 
 ## Solutions et dépendances
 
-Tout peut rester **local, gratuit et sans dépendance** : `assert` (ou un exécutable de test maison) pour les tests, GNU Make ou CMake (open source), `clang-format`/`clang-tidy` (open source), `-fsanitize=address,undefined` (déjà disponible dans g++). Une bibliothèque de test (Catch2/doctest, header-only, open source) est possible mais pas nécessaire à cette taille.
+Toutes gratuites et locales : CMake, CTest, g++/clang, `-fsanitize=address,undefined`, GitHub Actions (dépôt public). **Raylib 5.5** est open source (licence zlib/libpng) ; limite : version exacte demandée et installation système requise, sauf `FetchContent` (nécessite un accès réseau à la configuration).
 
 ## Dette technique
 
-- **À corriger maintenant :** EOF, quête, Pile Face, accès hors bornes, incohérence de résurrection, documentation CMake/Ombre.
-- **Peut attendre :** `GameState`, déplacement des fonctions d'éléments, sauvegarde atomique, validation du fichier.
-- **Risque futur :** ajouter une 4ᵉ ou 5ᵉ classe / un 4ᵉ héros avec les bornes `1..3` codées en dur ; `Game.cpp` qui grossit en one-liners.
-- **Peut rester simple :** pas de moteur de plugins, pas de GUI, `shared_ptr` pour les classes (un `unique_ptr` conviendrait mais l'impact est nul).
+- **À corriger maintenant :** C1, C2, EOF, quête, Pile Face, bornes du chargeur de campagne.
+- **Peut attendre :** C3, C4, F1, B2-B4, U1-U2.
+- **Risque futur :** `RaylibGame.cpp` qui grossit ; états dupliqués (quêtes ×3 héros en campagne) ; deux chargeurs de sauvegarde aux exigences très différentes.
+- **Peut rester simple :** format texte avec `std::quoted`, un seul exécutable de test, pas de moteur de données.
 
 ---
 
@@ -204,69 +229,59 @@ Tout peut rester **local, gratuit et sans dépendance** : `assert` (ou un exécu
 ### Phase 1 — Corrections rapides
 | Tâche | Priorité | Difficulté | Impact | Fichiers |
 |---|---|---|---|---|
-| Gérer l'EOF dans `ask()` et `getline` | Élevée | Faible | Supprime un gel/une boucle infinie | `Terminal.hpp`, `Game.cpp:14` |
-| Retirer `updateQuestProgress` du coup (ligne 87) | Moyenne | Faible | Quête correcte | `CombatSystem.cpp` |
-| Corriger la chance de Pile Face | Moyenne | Faible | Équilibrage | `Game.cpp:28`, `PileFace.cpp` |
-| Remplacer `ask(1,3)` par `team.size()` ou exiger 3 héros au chargement | Moyenne | Faible | Supprime l'UB | `CombatSystem.cpp`, `Game.cpp`, `SaveSystem.cpp` |
-| Message « on ne fuit pas un boss » | Faible | Faible | UX | `CombatSystem.cpp` |
+| Borner les PV à 0 (`std::max(0, …)`) ; rejeter `hp<0` aussi à l'écriture | Élevée | Faible | Fin de la perte silencieuse de run | `RogueliteSystem.cpp:250`, `RogueliteSaveSystem.cpp:134` |
+| Ne donner l'XP/le soin de niveau qu'aux vivants | Élevée | Faible | Respecte le README | `Player.hpp:30`, `RogueliteSystem.cpp:264`, `CombatSystem.cpp:106`, `ArenaSystem.cpp:19` |
+| Gérer l'EOF dans `ask()` / `getline` | Élevée | Faible | Plus de gel/sortie infinie | `Terminal.hpp:9`, `Game.cpp` |
+| Quête : supprimer l'appel par coup | Moyenne | Faible | Quête correcte | `CombatSystem.cpp:87` |
+| Pile Face : retirer la chance de base de 35 | Moyenne | Faible | Équilibrage | `HeroFactory.cpp:31` |
 
 ### Phase 2 — Nettoyage
 | Tâche | Priorité | Difficulté | Impact | Fichiers |
 |---|---|---|---|---|
-| Retirer du suivi `savegame.txt` et binaires `legacy/` | Moyenne | Faible | Dépôt propre | `.gitignore`, `sauvegarde/`, `legacy/` |
-| Corriger README/docs (CMake, Ombre, chemins) | Moyenne | Faible | Documentation fiable | `readme.md`, `docs/README_CLASSES.md`, `legacy.md` |
-| `.gitattributes` + normaliser les fins de ligne | Faible | Faible | Diffs propres | racine |
+| Fixture de test dédiée + retirer `savegame.txt` du suivi | Moyenne | Faible | Tests indépendants des parties jouées | `tests/`, `.gitignore`, `CMakeLists.txt:47` |
+| `.gitattributes` + normalisation des fins de ligne | Faible | Faible | Diffs propres | racine |
+| Corriger/retirer `docs/README_CLASSES.md`, `legacy.md`, `audit.md` obsolètes | Moyenne | Faible | Documentation fiable | `docs/`, racine |
+| Retirer les binaires `legacy/` du suivi | Faible | Faible | Dépôt plus léger | `legacy/` |
 
 ### Phase 3 — Refactoring
 | Tâche | Priorité | Difficulté | Impact | Fichiers |
 |---|---|---|---|---|
-| Règle unique de résurrection/mort | Moyenne | Moyenne | Cohérence de jeu | `Player.hpp`, `Game.cpp`, `CombatSystem.cpp` |
-| Équipement : échange au lieu de suppression | Moyenne | Faible | Aucune perte d'objet | `Game.cpp:66`, `Types.hpp` |
-| Déplacer les fonctions d'éléments | Faible | Faible | Cohérence | `Types.hpp`, `EnemyFactory.cpp` |
-| `GameState` pour quêtes/progress | Faible | Moyenne | État unique | `Game`, `SaveSystem` |
+| Emplacements d'équipement explicites (vide ≠ objet) | Moyenne | Moyenne | Supprime C4 | `Player.hpp`, `Types.hpp`, `RogueliteSystem.cpp` |
+| Séparer l'état persistant du rival de l'ennemi en combat | Moyenne | Moyenne | Supprime C3 | `RogueliteSystem.cpp` |
+| Constantes/fabriques partagées (potion, nb de héros) | Faible | Faible | Cohérence | `HeroFactory.cpp`, `RogueliteSystem.cpp`, `Game.cpp` |
 
 ### Phase 4 — Améliorations
 | Tâche | Priorité | Difficulté | Impact | Fichiers |
 |---|---|---|---|---|
-| Tests unitaires + `make test` | Moyenne | Moyenne | Anti-régression | nouveau `tests/`, `Makefile` |
-| Sauvegarde atomique + erreur visible | Moyenne | Faible | Fiabilité | `SaveSystem.cpp`, `Game.cpp:10` |
-| Écran de défaite / reprise | Moyenne | Faible | Pas de partie bloquée | `Game.cpp` |
-| Coût des techniques, arène par paliers | Faible | Moyenne | Équilibrage | `CombatSystem.cpp`, `ArenaSystem.cpp` |
+| Tests C1-C4 + `Player::criticalChance` + EOF | Moyenne | Faible | Non-régression | `tests/` |
+| Repli de build sans Raylib / documentation d'installation | Moyenne | Moyenne | Premier build réussi | `CMakeLists.txt`, `Makefile`, `readme.md` |
+| Sauvegarde atomique + erreur visible | Moyenne | Faible | Fiabilité | `RogueliteSaveSystem.cpp`, `RaylibGame.cpp` |
+| Noms accentués, police complète | Faible | Moyenne | UX | `RaylibGame.cpp` |
+| CI GitHub Actions (build terminal + ctest) | Faible | Faible | Détection rapide | `.github/workflows/` |
 
 ### Phase 5 — Optimisation
-Aucune optimisation justifiée. Éventuellement : `Makefile` avec objets séparés pour des rebuilds plus rapides (utile seulement si le projet grossit).
+Aucune optimisation justifiée.
 
 ---
 
 ## Architecture recommandée
 
-L'architecture actuelle est **adaptée** ; la cible est une évolution légère, pas une refonte :
-
-```
-include/core/    Types.hpp, Player.hpp, Terminal.hpp, GameState.hpp (nouveau)
-src/core/        Types.cpp (nouveau : fonctions d'éléments)
-src/characters/  inchangé
-src/entities/    EnemyFactory.cpp (données seulement)
-src/systems/     inchangé (Game.cpp reformaté)
-tests/           tests unitaires (nouveau)
-data/ (optionnel) ennemis en fichier de données
-docs/            alignés sur le code
-```
+L'architecture actuelle est **bien proportionnée** ; pas de refonte. Cible : (1) `game_core` reste sans I/O ni dépendance graphique ; (2) `ui/` ne décide d'aucune règle de jeu (déjà largement vrai) ; (3) `tests/fixtures/` pour les données de test ; (4) une règle de vie/mort unique dans `Player`.
 
 ## Résumé décisionnel
 
-- **À conserver :** hiérarchie de classes + factory, découpage en systèmes, sérialisation `std::quoted`, bestiaire, build sans warning.
-- **À améliorer :** gestion des entrées (EOF), validation de sauvegarde, messages utilisateur.
-- **À refactoriser :** fonctions d'éléments, état des quêtes, règle de mort/résurrection, équipement.
-- **À supprimer/remplacer :** `savegame.txt` et binaires `legacy/` du suivi Git ; docs obsolètes (`legacy.md`, passages CMake/Ombre).
-- **À ajouter :** tests minimaux, `CMakeLists.txt` (ou retrait de la doc), `.gitattributes`.
-- **À surveiller :** bornes à 3 héros codées en dur, croissance de `Game.cpp`.
-- **Priorités absolues :** (1) EOF, (2) quête/Pile Face/résurrection, (3) bornes de `load()`, (4) documentation de build.
+- **À conserver :** séparation `core` / `ui`, `CombatRules`, RNG injecté, validation de sauvegarde roguelite, hiérarchie de classes, build sans warning.
+- **À améliorer :** gestion des PV négatifs, build par défaut, documentation, tests ciblés.
+- **À refactoriser :** règle de mort/XP, équipement vide, état du rival.
+- **À supprimer/remplacer :** `audit.md` périmé à la racine, binaires `legacy/`, `savegame.txt` comme fixture.
+- **À ajouter :** tests de non-régression, CI, repli sans Raylib.
+- **À surveiller :** taille de `RaylibGame.cpp`, cohérence README ↔ comportement (« les morts ne reviennent pas »).
+- **Priorités absolues :** C1 (perte de run), C2 (résurrection), EOF.
 
 ## Questions ouvertes / faits indéterminables
 
-- Mort permanente ou réanimation : intention de design non documentée.
-- La technique sans coût est-elle voulue ? Le bonus Pile Face (35 + 35) est-il voulu ?
-- `guide.md` (11 Ko) et `legacy/*` : rôle exact non établi par cet audit.
-- Comportement sous Windows/macOS/clang et rendu visuel des cadres Unicode : non testés.
-- Les noms (« Maladie », « Rachid ») dans `savegame.txt` sont-ils des données volontairement publiées ? À confirmer par l'auteur.
+- Rendu graphique, ergonomie souris/clavier, polices : **non testés** (pas de Raylib ni d'écran).
+- Le retour à l'état « checkpoint » via `Échap` est-il voulu comme garde-fou ou comme faille acceptée ?
+- Un rival doit-il revenir blessé, soigné ou à PV de départ ?
+- La campagne terminal reste-t-elle maintenue à terme (le roguelite est maintenant le mode principal) ?
+- Comportement sous Windows/macOS/clang : non testé.
